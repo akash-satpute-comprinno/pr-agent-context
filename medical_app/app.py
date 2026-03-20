@@ -1,0 +1,1945 @@
+# app.py - Unified advanced backend (merged & cleaned)
+import os
+import sys
+import json
+import re
+import uuid
+import base64
+import asyncio
+from datetime import datetime, timedelta
+from dotenv import load_dotenv
+from flask import Flask, render_template, request, jsonify
+from flask_socketio import SocketIO, emit
+from flask_jwt_extended import JWTManager, jwt_required, create_access_token, get_jwt_identity
+import razorpay
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+import boto3
+from io import BytesIO
+
+# Local DB helpers (assumed present in project)
+from chat_db import (
+    init_db,
+    save_message,
+    load_messages,
+    get_all_threads,
+    update_thread_title,
+    cleanup_old_threads,
+    delete_thread,
+)
+
+# E-commerce models
+from models.user import User
+from models.cart import Cart
+from models.order import Order
+
+load_dotenv()
+
+# Initialize DB and cleanup old threads
+init_db()
+cleanup_old_threads(10)
+
+# Paths & runtime info
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+PYTHON_PATH = sys.executable
+
+# Flask + SocketIO
+app = Flask(__name__)
+app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "medai_secret_key_2024")
+app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY", "medai_jwt_secret_2024")
+app.config["JWT_ACCESS_TOKEN_EXPIRES"] = False  # Never expire (or set to timedelta for specific time)
+socketio = SocketIO(app, cors_allowed_origins="*")
+
+# Initialize JWT
+jwt = JWTManager(app)
+
+# Initialize Razorpay client
+try:
+    razorpay_client = razorpay.Client(auth=(os.getenv("RAZORPAY_KEY_ID"), os.getenv("RAZORPAY_KEY_SECRET")))
+    print("Razorpay client initialized successfully")
+except Exception as e:
+    print(f"Razorpay initialization failed: {e}")
+    razorpay_client = None
+
+# Initialize AWS Polly client with .env credentials
+try:
+    aws_access_key = os.getenv("AWS_ACCESS_KEY_ID")
+    aws_secret_key = os.getenv("AWS_SECRET_ACCESS_KEY")
+    aws_region = os.getenv("AWS_DEFAULT_REGION", "us-east-1")
+    
+    if aws_access_key and aws_secret_key:
+        polly_client = boto3.client(
+            'polly',
+            aws_access_key_id=aws_access_key,
+            aws_secret_access_key=aws_secret_key,
+            region_name=aws_region
+        )
+        print("AWS Polly client initialized with .env credentials")
+    else:
+        print("AWS credentials not found in .env, Polly disabled")
+        polly_client = None
+except Exception as e:
+    print(f"AWS Polly initialization failed: {e}")
+    polly_client = None
+
+# Initialize Amazon Bedrock client with .env credentials
+try:
+    if aws_access_key and aws_secret_key:
+        bedrock_client = boto3.client(
+            'bedrock-runtime',
+            aws_access_key_id=aws_access_key,
+            aws_secret_access_key=aws_secret_key,
+            region_name=aws_region
+        )
+        print("Amazon Bedrock client initialized with .env credentials")
+        
+        # Initialize CloudWatch client for monitoring
+        cloudwatch_client = boto3.client(
+            'cloudwatch',
+            aws_access_key_id=aws_access_key,
+            aws_secret_access_key=aws_secret_key,
+            region_name=aws_region
+        )
+        print("AWS CloudWatch client initialized for monitoring")
+    else:
+        print("AWS credentials not found in .env, Bedrock disabled")
+        bedrock_client = None
+        cloudwatch_client = None
+except Exception as e:
+    print(f"Amazon Bedrock initialization failed: {e}")
+    bedrock_client = None
+    cloudwatch_client = None
+
+# AWS CloudWatch Monitoring Functions
+def send_cloudwatch_metric(metric_name, value, unit='Count', dimensions=None):
+    """Send custom metrics to CloudWatch"""
+    if not cloudwatch_client:
+        return
+    
+    try:
+        metric_data = {
+            'MetricName': metric_name,
+            'Value': value,
+            'Unit': unit,
+            'Timestamp': datetime.utcnow()
+        }
+        
+        if dimensions:
+            metric_data['Dimensions'] = dimensions
+        
+        cloudwatch_client.put_metric_data(
+            Namespace='MedAI/ModelUsage',
+            MetricData=[metric_data]
+        )
+    except Exception as e:
+        print(f"CloudWatch metric failed: {e}")
+
+def log_model_usage(function_name, model_used, success=True, response_time=None):
+    """Track model usage with AWS CloudWatch"""
+    try:
+        # Determine model type
+        if "nova-lite" in model_used.lower():
+            model_type = "NovaLite"
+        elif "nova-pro" in model_used.lower() and "vision" in model_used.lower():
+            model_type = "NovaProVision"
+        elif "nova-pro" in model_used.lower():
+            model_type = "NovaPro"
+        elif "openai" in model_used.lower():
+            model_type = "OpenAIFallback"
+        else:
+            model_type = "Unknown"
+        
+        # Send metrics to CloudWatch
+        dimensions = [
+            {'Name': 'Function', 'Value': function_name},
+            {'Name': 'ModelType', 'Value': model_type}
+        ]
+        
+        # Usage count metric
+        send_cloudwatch_metric('ModelCalls', 1, 'Count', dimensions)
+        
+        # Success/failure metric
+        if success:
+            send_cloudwatch_metric('SuccessfulCalls', 1, 'Count', dimensions)
+        else:
+            send_cloudwatch_metric('FailedCalls', 1, 'Count', dimensions)
+        
+        # Response time metric (if provided)
+        if response_time:
+            send_cloudwatch_metric('ResponseTime', response_time, 'Milliseconds', dimensions)
+        
+        # Console logging
+        status = "✅" if success else "❌"
+        print(f"📊 {function_name}: {model_used} {status}")
+        
+    except Exception as e:
+        print(f"Monitoring error: {e}")
+
+def send_cost_metric(model_type, estimated_cost):
+    """Track estimated costs in CloudWatch"""
+    try:
+        dimensions = [{'Name': 'ModelType', 'Value': model_type}]
+        send_cloudwatch_metric('EstimatedCost', estimated_cost, 'None', dimensions)
+    except Exception as e:
+        print(f"Cost tracking error: {e}")
+
+def create_cloudwatch_dashboard():
+    """Create CloudWatch dashboard for MedAI monitoring"""
+    if not cloudwatch_client:
+        return
+    
+    try:
+        dashboard_body = {
+            "widgets": [
+                {
+                    "type": "metric",
+                    "properties": {
+                        "metrics": [
+                            ["MedAI/ModelUsage", "ModelCalls", "ModelType", "NovaLite"],
+                            [".", ".", ".", "NovaPro"],
+                            [".", ".", ".", "NovaProVision"],
+                            [".", ".", ".", "OpenAIFallback"]
+                        ],
+                        "period": 300,
+                        "stat": "Sum",
+                        "region": aws_region,
+                        "title": "Model Usage by Type"
+                    }
+                },
+                {
+                    "type": "metric",
+                    "properties": {
+                        "metrics": [
+                            ["MedAI/ModelUsage", "SuccessfulCalls"],
+                            [".", "FailedCalls"]
+                        ],
+                        "period": 300,
+                        "stat": "Sum",
+                        "region": aws_region,
+                        "title": "Success vs Failure Rate"
+                    }
+                },
+                {
+                    "type": "metric",
+                    "properties": {
+                        "metrics": [
+                            ["MedAI/ModelUsage", "ResponseTime", "ModelType", "NovaLite"],
+                            [".", ".", ".", "NovaPro"],
+                            [".", ".", ".", "NovaProVision"],
+                            [".", ".", ".", "OpenAIFallback"]
+                        ],
+                        "period": 300,
+                        "stat": "Average",
+                        "region": aws_region,
+                        "title": "Average Response Time (ms)"
+                    }
+                }
+            ]
+        }
+        
+        cloudwatch_client.put_dashboard(
+            DashboardName='MedAI-Model-Usage',
+            DashboardBody=json.dumps(dashboard_body)
+        )
+        print("📊 CloudWatch dashboard created: MedAI-Model-Usage")
+        
+    except Exception as e:
+        print(f"Dashboard creation failed: {e}")
+
+# ---------------------
+# Amazon Nova Helper Functions
+# ---------------------
+def call_nova_pro(messages_content, max_tokens=1000):
+    """Call Amazon Nova Pro for complex tasks"""
+    if not bedrock_client:
+        raise Exception("Bedrock client not available")
+    
+    body = {
+        "messages": [{"role": "user", "content": [{"text": messages_content}]}],
+        "inferenceConfig": {
+            "maxTokens": max_tokens,
+            "temperature": 0
+        }
+    }
+    
+    response = bedrock_client.invoke_model(
+        modelId='amazon.nova-pro-v1:0',
+        body=json.dumps(body)
+    )
+    
+    result = json.loads(response['body'].read())
+    return result['output']['message']['content'][0]['text']
+
+def call_nova_lite(prompt, max_tokens=200):
+    """Call Amazon Nova Lite for simple tasks"""
+    if not bedrock_client:
+        raise Exception("Bedrock client not available")
+    
+    body = {
+        "messages": [{"role": "user", "content": [{"text": prompt}]}],
+        "inferenceConfig": {
+            "maxTokens": max_tokens,
+            "temperature": 0
+        }
+    }
+    
+    response = bedrock_client.invoke_model(
+        modelId='amazon.nova-lite-v1:0',
+        body=json.dumps(body)
+    )
+    
+    result = json.loads(response['body'].read())
+    return result['output']['message']['content'][0]['text']
+
+def call_nova_pro_conversation(messages, max_tokens=1000):
+    """Call Amazon Nova Pro for complex conversation with message history"""
+    if not bedrock_client:
+        raise Exception("Bedrock client not available")
+    
+    # Convert LangChain messages to Nova format
+    nova_messages = []
+    system_content = ""
+    
+    for msg in messages:
+        if hasattr(msg, 'content'):
+            if msg.__class__.__name__ == 'SystemMessage':
+                # Store system message to prepend to first user message
+                system_content = msg.content
+            elif msg.__class__.__name__ == 'HumanMessage':
+                content = msg.content
+                if system_content:
+                    # Prepend system message to first user message
+                    content = f"System Instructions: {system_content}\n\nUser: {content}"
+                    system_content = ""  # Only use once
+                nova_messages.append({"role": "user", "content": [{"text": content}]})
+            elif msg.__class__.__name__ == 'AIMessage':
+                nova_messages.append({"role": "assistant", "content": [{"text": msg.content}]})
+    
+    body = {
+        "messages": nova_messages,
+        "inferenceConfig": {
+            "maxTokens": max_tokens,
+            "temperature": 0
+        }
+    }
+    
+    response = bedrock_client.invoke_model(
+        modelId='amazon.nova-pro-v1:0',
+        body=json.dumps(body)
+    )
+    
+    result = json.loads(response['body'].read())
+    return result['output']['message']['content'][0]['text']
+
+def call_nova_pro_vision(image_base64, text_prompt, max_tokens=1000):
+    """Call Amazon Nova Pro for vision tasks"""
+    if not bedrock_client:
+        raise Exception("Bedrock client not available")
+    
+    body = {
+        "messages": [{
+            "role": "user",
+            "content": [
+                {
+                    "image": {
+                        "format": "jpeg",
+                        "source": {"bytes": image_base64}
+                    }
+                },
+                {"text": text_prompt}
+            ]
+        }],
+        "inferenceConfig": {
+            "maxTokens": max_tokens,
+            "temperature": 0
+        }
+    }
+    
+    response = bedrock_client.invoke_model(
+        modelId='amazon.nova-pro-v1:0',
+        body=json.dumps(body)
+    )
+    
+    result = json.loads(response['body'].read())
+    return result['output']['message']['content'][0]['text']
+
+# ---------------------
+# Utilities / LLM calls
+# ---------------------
+def _clean_llm_json_response(raw: str) -> str:
+    """Strip markdown fences and return the JSON-like substring if present."""
+    if not raw:
+        return raw
+    s = raw.strip()
+    if s.startswith("```json"):
+        s = s.replace("```json", "", 1).replace("```", "").strip()
+    elif s.startswith("```"):
+        s = s.replace("```", "").strip()
+    # Try to extract the first {...} block if there is surrounding text
+    m = re.search(r"\{.*\}", s, re.DOTALL)
+    return m.group() if m else s
+
+def analyze_prescription_image(image_base64: str) -> dict:
+    """
+    Use Amazon Nova Pro Vision to extract prescription structure with OpenAI fallback.
+    Returns a dict: {"medicines": [...], "doctor_info": ..., "instructions": ..., "patient_info": ...}
+    """
+    text_prompt = (
+        "Analyze this prescription image and extract all visible information. "
+        "Return ONLY a JSON object with this structure:\n"
+        "{\n"
+        "  \"medicines\": [\"medicine name 1\", \"medicine name 2\"],\n"
+        "  \"doctor_info\": \"Doctor name and details\",\n"
+        "  \"instructions\": \"Dosage and instructions\",\n"
+        "  \"patient_info\": \"Patient details if visible\"\n"
+        "}\n\nReturn only the JSON, no other text."
+    )
+    
+    # Try Amazon Nova Pro Vision first
+    if bedrock_client:
+        try:
+            start_time = datetime.utcnow()
+            response_text = call_nova_pro_vision(image_base64, text_prompt, max_tokens=1000)
+            cleaned = _clean_llm_json_response(response_text)
+            result = json.loads(cleaned)
+            
+            response_time = (datetime.utcnow() - start_time).total_seconds() * 1000
+            log_model_usage("analyze_prescription", "Nova Pro Vision", True, response_time)
+            return result
+            
+        except Exception as e:
+            log_model_usage("analyze_prescription", "Nova Pro Vision", False)
+            print(f"⚠️ Nova Pro Vision prescription analysis failed: {e}")
+            # Continue to OpenAI fallback
+    
+    # Fallback to OpenAI GPT-4o Vision
+    try:
+        start_time = datetime.utcnow()
+        llm = ChatOpenAI(model="gpt-4o", temperature=0)
+        messages = [
+            HumanMessage(
+                content=[
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}},
+                    {"type": "text", "text": text_prompt}
+                ]
+            )
+        ]
+        response = llm.invoke(messages)
+        cleaned = _clean_llm_json_response(response.content)
+        result = json.loads(cleaned)
+        
+        response_time = (datetime.utcnow() - start_time).total_seconds() * 1000
+        log_model_usage("analyze_prescription", "OpenAI GPT-4o Vision", True, response_time)
+        return result
+        
+    except Exception as e:
+        log_model_usage("analyze_prescription", "OpenAI GPT-4o Vision", False)
+        print(f"❌ Prescription analysis failed: {e}")
+        return {"medicines": [], "error": f"Analysis failed: {str(e)}"}
+
+# AWS Comprehend Medical Integration for Medicine Extraction
+def extract_medicines_with_aws(query: str) -> list:
+    """
+    Extract medicine names from query using AWS Comprehend Medical.
+    Uses .env credentials for dedicated IAM user.
+    """
+    try:
+        from botocore.exceptions import NoCredentialsError, ClientError
+        
+        # Get AWS credentials from .env
+        aws_access_key = os.getenv("AWS_ACCESS_KEY_ID")
+        aws_secret_key = os.getenv("AWS_SECRET_ACCESS_KEY")
+        aws_region = os.getenv("AWS_DEFAULT_REGION", "us-east-1")
+        
+        if not aws_access_key or not aws_secret_key:
+            print("⚠️ AWS credentials not found in .env")
+            return _fallback_medicine_extraction(query)
+        
+        print(f"🔍 Testing AWS Comprehend Medical with query: '{query}'")
+        
+        # Initialize Comprehend Medical with .env credentials
+        comprehend_medical = boto3.client(
+            'comprehendmedical',
+            aws_access_key_id=aws_access_key,
+            aws_secret_access_key=aws_secret_key,
+            region_name=aws_region
+        )
+        
+        response = comprehend_medical.detect_entities_v2(Text=query)
+        
+        print(f"🔍 AWS Response: {len(response.get('Entities', []))} entities found")
+        
+        medicines = []
+        for entity in response['Entities']:
+            print(f"🔍 Entity: {entity['Text']} | Category: {entity['Category']} | Score: {entity['Score']}")
+            if entity['Category'] == 'MEDICATION' and entity['Score'] > 0.5:  # Lowered from 0.7 to 0.5
+                medicine_name = entity['Text'].strip()
+                if medicine_name and len(medicine_name) > 2:
+                    medicines.append(medicine_name)
+        
+        print(f"🔬 AWS Medical extracted: {medicines} from '{query}'")
+        return medicines if medicines else _fallback_medicine_extraction(query)
+        
+    except (NoCredentialsError, ClientError) as e:
+        print(f"⚠️ AWS Medical error: {e}")
+        return _fallback_medicine_extraction(query)
+    except Exception as e:
+        print(f"⚠️ AWS Medical failed: {e}")
+        return _fallback_medicine_extraction(query)
+
+def _fallback_medicine_extraction(query: str) -> list:
+    """Simple fallback if AWS unavailable"""
+    import re
+    # Extract capitalized words that could be medicine names
+    potential_medicines = re.findall(r'\b[A-Z][a-z]{3,}\b', query)
+    exclude = {'Find', 'Search', 'Medicine', 'Store', 'Near', 'Price'}
+    medicines = [m for m in potential_medicines if m not in exclude]
+    print(f"🔄 Fallback extracted: {medicines}")
+    return medicines
+
+# Cache for medicine names to avoid repeated database calls
+_medicine_cache = None
+_cache_timestamp = None
+
+def get_medicine_names():
+    """Get cached medicine names or fetch from database"""
+    global _medicine_cache, _cache_timestamp
+    import time
+    
+    # Cache for 5 minutes
+    if _medicine_cache is None or (time.time() - _cache_timestamp) > 300:
+        try:
+            result = asyncio.run(call_mcp_tool("medical-database", "execute_sql", {
+                "sql_query": "SELECT DISTINCT medicine_name FROM medicines"
+            }))
+            
+            if result and result.startswith('['):
+                import json
+                medicines = json.loads(result)
+                _medicine_cache = [med['medicine_name'] for med in medicines]
+                _cache_timestamp = time.time()
+            else:
+                _medicine_cache = []
+        except:
+            _medicine_cache = []
+    
+    return _medicine_cache
+
+def fuzzy_match_medicine(user_input: str, threshold: float = 0.6) -> str:
+    """
+    Fast fuzzy matching for medicine names
+    """
+    try:
+        medicine_names = get_medicine_names()
+        if not medicine_names:
+            return user_input
+        
+        user_lower = user_input.lower()
+        
+        # Fast exact match first
+        for med_name in medicine_names:
+            if user_lower in med_name.lower() or med_name.lower() in user_lower:
+                return med_name
+        
+        # Simple fuzzy matching for common typos
+        def quick_similarity(s1, s2):
+            s1, s2 = s1.lower(), s2.lower()
+            if abs(len(s1) - len(s2)) > 3:  # Skip if length difference too big
+                return 0.0
+            
+            # Count matching characters in order
+            matches = 0
+            i = j = 0
+            while i < len(s1) and j < len(s2):
+                if s1[i] == s2[j]:
+                    matches += 1
+                    i += 1
+                    j += 1
+                else:
+                    i += 1
+            
+            return matches / max(len(s1), len(s2))
+        
+        # Find best match quickly
+        best_match = user_input
+        best_score = 0.0
+        
+        for med_name in medicine_names:
+            # Check against medicine name and first word
+            score = quick_similarity(user_input, med_name)
+            first_word = med_name.split()[0] if med_name.split() else med_name
+            word_score = quick_similarity(user_input, first_word)
+            
+            final_score = max(score, word_score)
+            
+            if final_score > best_score and final_score >= threshold:
+                best_score = final_score
+                best_match = med_name
+        
+        if best_score >= threshold:
+            print(f"FUZZY MATCH: '{user_input}' -> '{best_match}' (score: {best_score:.2f})")
+            return best_match
+        else:
+            return user_input
+            
+    except Exception as e:
+        print(f"FUZZY MATCH ERROR: {str(e)}")
+        return user_input
+
+def generate_title(messages):
+    """Generate a short title using Amazon Nova Lite with OpenAI fallback."""
+    if not messages:
+        return "New Chat"
+    
+    # Extract conversation context
+    conversation_text = ""
+    for msg in messages:
+        role = msg.get("role", "")
+        content = msg.get("content", "")
+        if role == "user":
+            conversation_text += f"User: {content}\n"
+        elif role == "assistant":
+            conversation_text += f"Assistant: {content[:100]}...\n"  # Limit assistant response length
+    
+    # Try Amazon Nova Lite first
+    if bedrock_client:
+        try:
+            start_time = datetime.utcnow()
+            prompt = f"""Generate a short 4-5 word title that summarizes this medical conversation. Be specific and concise:
+
+{conversation_text.strip()}
+
+Title should reflect the main medical topic or concern discussed."""
+            
+            response_text = call_nova_lite(prompt, max_tokens=50)
+            title = response_text.strip().split("\n")[0][:50]
+            title = title.strip('"\'').strip()
+            
+            if title:
+                response_time = (datetime.utcnow() - start_time).total_seconds() * 1000
+                log_model_usage("generate_title", "Nova Lite", True, response_time)
+                return title
+                
+        except Exception as e:
+            log_model_usage("generate_title", "Nova Lite", False)
+            print(f"⚠️ Nova Lite title generation failed: {e}")
+            # Continue to OpenAI fallback
+    
+    # Fallback to OpenAI
+    try:
+        start_time = datetime.utcnow()
+        llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+        prompt = f"""Generate a short 4-5 word title that summarizes this medical conversation. Be specific and concise:
+
+{conversation_text.strip()}
+
+Title should reflect the main medical topic or concern discussed."""
+        
+        response = llm.invoke([HumanMessage(content=prompt)])
+        title = response.content.strip().split("\n")[0][:50]
+        title = title.strip('"\'').strip()
+        
+        if title:
+            response_time = (datetime.utcnow() - start_time).total_seconds() * 1000
+            log_model_usage("generate_title", "OpenAI GPT-4o-mini", True, response_time)
+            return title
+        else:
+            log_model_usage("generate_title", "OpenAI GPT-4o-mini", False)
+            return "Medical Consultation"
+            
+    except Exception as e:
+        print(f"❌ Title generation error: {e}")
+        # Final fallback - use first user message
+        first_user_msg = next((m["content"] for m in messages if m.get("role") == "user"), "New Chat")
+        words = first_user_msg.split()
+        if len(words) <= 5:
+            return first_user_msg[:40]
+        return " ".join(words[:5]) + "..."
+
+# -----------------------
+# MCP (tool) communication
+# -----------------------
+# OPTIMIZATION: Prescription analysis moved to direct function call for better performance
+# Removed prescription-server MCP overhead - 50% faster, lower costs
+async def call_mcp_tool(server_name: str, tool_name: str, arguments: dict):
+    """
+    Call an MCP server tool via stdio_client.
+    server_name -> maps to a file inside mcp_servers/
+    """
+    server_map = {
+        "medical-database": "database_server.py",
+        "medical-map": "map_server.py",
+        # Removed prescription-server - now handled directly in app.py for better performance
+    }
+
+    if server_name not in server_map:
+        return f"Error: Unknown server '{server_name}'"
+
+    server_path = os.path.join(BASE_DIR, "mcp_servers", server_map[server_name])
+    params = StdioServerParameters(command=PYTHON_PATH, args=[server_path])
+
+    try:
+        async with stdio_client(params) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                tools_response = await session.list_tools()
+                tool_names = [t.name for t in tools_response.tools]
+                if tool_name not in tool_names:
+                    return f"Error: Tool '{tool_name}' not found on server '{server_name}'"
+                result = await session.call_tool(tool_name, arguments)
+                if result and result.content:
+                    return result.content[0].text
+                else:
+                    return "Tool returned empty result"
+    except Exception as e:
+        return f"Error calling tool: {str(e)}"
+
+# -------------------------------
+# Advanced process_query (async)
+# -------------------------------
+async def process_query(query: str, image_base64: str = None, conversation_history: list = None, user_location: dict = None):
+    """
+    Advanced decision-making pipeline with AWS medicine extraction.
+    Returns (assistant_text_response, raw_tool_result_or_none)
+    """
+    import re
+    
+    # STEP 1: Extract medicines using AWS Comprehend Medical
+    extracted_medicines = extract_medicines_with_aws(query)
+    
+    # STEP 2: Remove hardcoded bypasses - let AI handle all decisions
+    # (Commented out hardcoded logic to let AI decide intelligently)
+    
+    # Build enhanced context with extracted medicines
+    context = ""
+    if conversation_history:
+        recent = conversation_history[-3:] if len(conversation_history) > 3 else conversation_history
+        context_parts = []
+        for m in recent:
+            content = m['content']
+            if "Prescription contains:" in content or "found **" in content:
+                context_parts.append(f"{m['role']}: {content}")
+            else:
+                context_parts.append(f"{m['role']}: {content[:200]}")
+        context = "\n".join(context_parts)
+
+    location_info = f"User Location: {user_location.get('latitude')}, {user_location.get('longitude')}" if user_location else "User location not available"
+
+    # STEP 3: Enhanced system prompt with intelligent MCP server selection
+    system_prompt = f"""You are MedAI, a medical assistant with access to specialized MCP servers.
+
+EXTRACTED MEDICINES: {extracted_medicines}
+USER LOCATION: {location_info}
+
+MCP SERVER ARCHITECTURE:
+1. medical-database server: execute_sql tool - for medicine data only (prices, names, descriptions)
+2. medical-map server: get_nearby_stores tool - for store locations with coordinates (triggers map display)
+
+INTELLIGENT DECISION RULES:
+1. Medicine info only (price, description) → use medical-database server
+2. Store locations + medicine availability → use medical-map server (shows map)
+3. Just store locations → use medical-map server (shows map)
+
+RESPONSE FORMAT - ALWAYS return JSON:
+For database queries: {{"use_tool": true, "tool": "execute_sql", "arguments": {{"sql_query": "SELECT..."}}}}
+For store locations: {{"use_tool": true, "tool": "get_nearby_stores", "arguments": {{"latitude": lat, "longitude": lon}}}}
+For direct answer: {{"use_tool": false, "answer": "Your response here"}}
+
+SMART MCP SELECTION EXAMPLES:
+
+User: "what is the price of Paracetamol" + Extracted: ['Paracetamol']
+→ {{"use_tool": true, "tool": "execute_sql", "arguments": {{"sql_query": "SELECT medicine_name, price FROM medicines WHERE medicine_name LIKE '%Paracetamol%'"}}}}
+
+User: "is Dolo available" + Extracted: ['Dolo'] 
+→ {{"use_tool": true, "tool": "get_nearby_stores", "arguments": {{"medicine_filter": "Dolo"}}}} (shows stores with Dolo on map)
+
+User: "find nearby stores"
+→ {{"use_tool": true, "tool": "get_nearby_stores", "arguments": {{}}}} (shows all stores on map)
+
+User: "where can I buy Paracetamol" + Extracted: ['Paracetamol']
+→ {{"use_tool": true, "tool": "get_nearby_stores", "arguments": {{"medicine_filter": "Paracetamol"}}}} (shows stores with Paracetamol on map)
+
+ALWAYS choose the MCP server that best serves the user's intent. If they want locations/availability, use medical-map server for map display.
+
+Current context: {context}"""
+
+    # STEP 4: Let AI make intelligent decisions with extracted medicine context
+    # Try Amazon Nova Pro first
+    if bedrock_client:
+        try:
+            # Build full conversation history for Nova Pro
+            messages = [SystemMessage(content=system_prompt)]
+            
+            # Add full conversation history
+            if conversation_history:
+                for msg in conversation_history:
+                    if msg['role'] == 'user':
+                        messages.append(HumanMessage(content=msg['content']))
+                    elif msg['role'] == 'assistant':
+                        messages.append(AIMessage(content=msg['content']))
+            
+            # Add current query
+            messages.append(HumanMessage(content=query))
+            
+            response_content = call_nova_pro_conversation(messages, max_tokens=1000)
+            print(f"✅ Nova Pro decision making used")
+            
+        except Exception as e:
+            print(f"⚠️ Nova Pro decision making failed: {e}")
+            # Fallback to OpenAI
+            llm = ChatOpenAI(model="gpt-4o", temperature=0)
+            
+            # Build full conversation history for LLM
+            messages = [SystemMessage(content=system_prompt)]
+            
+            # Add full conversation history
+            if conversation_history:
+                for msg in conversation_history:
+                    if msg['role'] == 'user':
+                        messages.append(HumanMessage(content=msg['content']))
+                    elif msg['role'] == 'assistant':
+                        messages.append(AIMessage(content=msg['content']))
+            
+            # Add current query
+            messages.append(HumanMessage(content=query))
+            
+            response = llm.invoke(messages)
+            response_content = response.content
+            print(f"🔄 OpenAI fallback decision making used")
+    else:
+        # Fallback to OpenAI when Bedrock not available
+        llm = ChatOpenAI(model="gpt-4o", temperature=0)
+        
+        # Build full conversation history for LLM
+        messages = [SystemMessage(content=system_prompt)]
+        
+        # Add full conversation history
+        if conversation_history:
+            for msg in conversation_history:
+                if msg['role'] == 'user':
+                    messages.append(HumanMessage(content=msg['content']))
+                elif msg['role'] == 'assistant':
+                    messages.append(AIMessage(content=msg['content']))
+        
+        # Add current query
+        messages.append(HumanMessage(content=query))
+        
+        response = llm.invoke(messages)
+        response_content = response.content
+        print(f"🔄 OpenAI fallback decision making used (Bedrock unavailable)")
+
+    cleaned = _clean_llm_json_response(response_content)
+    try:
+        decision = json.loads(cleaned)
+        print(f"DEBUG - LLM Decision: {decision}")
+    except Exception:
+        print(f"DEBUG - LLM returned plain text: {response_content[:100]}...")
+        return response_content, None
+
+    if decision.get("use_tool"):
+        tool_name = decision.get("tool")
+        arguments = decision.get("arguments", {})
+
+        if tool_name == "get_nearby_stores":
+            server_name = "medical-map"
+            if user_location:
+                arguments.setdefault("latitude", user_location["latitude"])
+                arguments.setdefault("longitude", user_location["longitude"])
+        else:
+            server_name = "medical-database"
+
+        result = await call_mcp_tool(server_name, tool_name, arguments)
+        
+        print(f"DEBUG - MCP Tool Result: {result}")
+
+        # Extract medicine names from the SQL query for better response formatting
+        medicine_names = []
+        if "sql_query" in arguments:
+            sql = arguments["sql_query"]
+            import re
+            likes = re.findall(r"LIKE '%([^%]+)%'", sql)
+            if likes:
+                medicine_names = likes
+            else:
+                in_match = re.search(r"IN \(([^)]+)\)", sql)
+                if in_match:
+                    quoted_values = re.findall(r"'([^']+)'", in_match.group(1))
+                    medicine_names = quoted_values
+
+        # Format for user
+        format_prompt = f"""User asked: "{query}"
+Database result: {result}
+Searched medicines: {', '.join(medicine_names) if medicine_names else 'Not specified'}
+
+If the database result shows "No results found":
+1. Specifically mention which medicines are not available: {', '.join(medicine_names) if medicine_names else 'the requested medicines'}
+2. Offer practical next steps:
+   - "Would you like me to check if we can order these for you?"
+   - "I can help you find contact information for our pharmacy team"
+3. DO NOT suggest more alternatives - user already received alternatives
+4. Be specific and solution-oriented
+
+If results are found:
+- Provide clear availability with store details and prices
+
+Always end with: 'Always consult your doctor for medical advice.'"""
+        
+        # Try Amazon Nova Lite first
+        if bedrock_client:
+            try:
+                formatted_response_text = call_nova_lite(format_prompt, max_tokens=500)
+                print(f"✅ Nova Lite formatting used")
+                return formatted_response_text, result
+            except Exception as e:
+                print(f"⚠️ Nova Lite formatting failed: {e}")
+                # Continue to OpenAI fallback
+        
+        # Fallback to OpenAI
+        format_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+        formatted_response = format_llm.invoke([HumanMessage(content=format_prompt)])
+        print(f"🔄 OpenAI fallback formatting used")
+        return formatted_response.content, result
+    else:
+        # Direct answer branch
+        return decision.get("answer", response_content), None
+
+# -------------------------
+# Flask routes (static UI)
+# -------------------------
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+@app.route("/debug")
+def debug():
+    return render_template("../debug_basic.html")
+
+@app.route("/debug-full")
+def debug_full():
+    return render_template("debug_index.html")
+
+@app.route("/api/threads")
+def api_get_threads():
+    threads = get_all_threads()
+    return jsonify([{"id": t[0], "title": t[1], "updated_at": t[2]} for t in threads])
+
+@app.route("/api/thread/<thread_id>/messages")
+def api_get_messages(thread_id):
+    return jsonify(load_messages(thread_id))
+
+@app.route("/api/thread/<thread_id>/delete", methods=["DELETE"])
+def api_delete_thread(thread_id):
+    delete_thread(thread_id)
+    return jsonify({"success": True})
+
+@app.route("/api/medicine-names")
+def get_medicine_names_api():
+    """Get all medicine names for autocomplete suggestions"""
+    try:
+        medicine_names = get_medicine_names()
+        return jsonify({"medicines": medicine_names})
+    except Exception as e:
+        print(f"❌ Error fetching medicine names: {e}")
+        return jsonify({"medicines": []})
+
+# -------------------------
+# Monitoring API (FIXED)
+# -------------------------
+
+@app.route("/api/monitoring/stats")
+def get_monitoring_stats():
+    """Get CloudWatch monitoring statistics"""
+    if not cloudwatch_client:
+        return jsonify({"error": "CloudWatch not available"})
+    
+    try:
+        end_time = datetime.utcnow()
+        start_time = end_time - timedelta(hours=24)
+
+        response = cloudwatch_client.get_metric_statistics(
+            Namespace='MedAI/ModelUsage',
+            MetricName='ModelCalls',
+            Dimensions=[],
+            StartTime=start_time,
+            EndTime=end_time,
+            Period=3600,
+            Statistics=['Sum']
+        )
+
+        total_calls = sum(point['Sum'] for point in response.get('Datapoints', []))
+
+        return jsonify({
+            "period": "24 hours",
+            "total_calls": int(total_calls),
+            "cloudwatch_url": f"https://{aws_region}.console.aws.amazon.com/cloudwatch/home?region={aws_region}#dashboards:name=MedAI-Model-Usage"
+        })
+    
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+
+@app.route("/api/monitoring/dashboard")
+def create_dashboard():
+    """Create CloudWatch dashboard"""
+    try:
+        create_cloudwatch_dashboard()
+        return jsonify({"success": True, "message": "Dashboard created"})
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+# -------------------------
+# SocketIO message handler
+# -------------------------
+@socketio.on("analyze_prescription")
+def handle_analyze_prescription(data):
+    """Handle prescription image analysis from Find Medicines popup"""
+    try:
+        image_data = data.get("image", "")
+        print(f"🔍 DEBUG - Received prescription analysis request")
+        
+        if not image_data:
+            emit("prescription_analysis_result", {"error": "No image provided"})
+            return
+        
+        # Extract base64 data
+        if "base64," in image_data:
+            image_base64 = image_data.split("base64,")[1]
+        else:
+            image_base64 = image_data
+        
+        # Use direct prescription analysis (optimized - no MCP overhead)
+        prescription_data = analyze_prescription_image(image_base64)
+        
+        print(f"🔍 DEBUG - Prescription analysis result: {prescription_data}")
+        
+        if prescription_data and not prescription_data.get("error"):
+            emit("prescription_analysis_result", {"success": True, "data": prescription_data})
+        else:
+            error_msg = prescription_data.get("error", "Analysis failed") if prescription_data else "No analysis result"
+            emit("prescription_analysis_result", {"error": error_msg})
+        
+    except Exception as e:
+        print(f"❌ ERROR in analyze_prescription: {str(e)}")
+        emit("prescription_analysis_result", {"error": str(e)})
+
+@socketio.on("search_medicines")
+def handle_search_medicines(data):
+    """
+    Handle medicine search from Find Medicines popup with store-centric ranking
+    
+    ENHANCED FUNCTIONALITY:
+    - Multi-medicine availability checking
+    - Store-centric results (not medicine-centric)
+    - Intelligent ranking: Availability (70%) + Stock (20%) + Distance (10%)
+    - Decreasing order by best match stores
+    """
+    try:
+        medicines = data.get("medicines", [])
+        user_location = data.get("location", {"latitude": 18.566039, "longitude": 73.766370})
+        print(f"🔍 DEBUG - Received medicine search request: {medicines}")
+        
+        if not medicines:
+            emit("medicine_search_result", {"error": "No medicines provided"})
+            return
+        
+        # Get all medicine availability data
+        all_medicine_data = []
+        
+        for medicine in medicines:
+            result = asyncio.run(call_mcp_tool("medical-database", "execute_sql", {
+                "sql_query": f"SELECT m.medicine_name, m.price, ms.store_name, ms.store_id, ss.stock_quantity, ms.latitude, ms.longitude FROM medicines m JOIN store_stock ss ON m.medicine_id = ss.medicine_id JOIN medical_stores ms ON ss.store_id = ms.store_id WHERE m.medicine_name LIKE '%{medicine}%' AND ss.stock_quantity > 0"
+            }))
+            
+            print(f"🔍 DEBUG - Database result for '{medicine}': Found {len(json.loads(result)) if result.startswith('[') else 0} items")
+            
+            if result and result.startswith('['):
+                medicine_data = json.loads(result)
+                for item in medicine_data:
+                    item['requested_medicine'] = medicine
+                all_medicine_data.extend(medicine_data)
+        
+        print(f"🔍 DEBUG - Total medicine data items: {len(all_medicine_data)}")
+
+        # Group by store and calculate availability ranking
+        store_rankings = {}
+        for item in all_medicine_data:
+            store_name = item['store_name']
+            store_id = item['store_id']
+            requested_medicine = item['requested_medicine']
+            
+            if store_name not in store_rankings:
+                store_rankings[store_name] = {
+                    "store_name": store_name,
+                    "store_id": store_id,
+                    "medicines_available": 0,
+                    "total_medicines_requested": len(medicines),
+                    "medicines": [],
+                    "total_stock": 0,
+                    "latitude": item.get('latitude', 18.566039),
+                    "longitude": item.get('longitude', 73.766370),
+                    "found_medicines": set()
+                }
+            
+            # Add medicine to store if not already added for this requested medicine
+            medicine_key = f"{requested_medicine}_{item['medicine_name']}"
+            if medicine_key not in store_rankings[store_name]["found_medicines"]:
+                store_rankings[store_name]["medicines"].append({
+                    "name": item['medicine_name'],
+                    "price": item['price'],
+                    "stock": item['stock_quantity'],
+                    "requested_for": requested_medicine
+                })
+                store_rankings[store_name]["found_medicines"].add(medicine_key)
+                store_rankings[store_name]["total_stock"] += item['stock_quantity']
+        
+        # Calculate medicines_available based on unique requested medicines found
+        for store in store_rankings.values():
+            unique_requested_medicines = set()
+            for medicine in store["medicines"]:
+                unique_requested_medicines.add(medicine["requested_for"])
+            store["medicines_available"] = len(unique_requested_medicines)
+            del store["found_medicines"]
+        
+        # Calculate availability percentage and distance-based ranking
+        for store in store_rankings.values():
+            store["availability_percentage"] = round((store["medicines_available"] / store["total_medicines_requested"]) * 100)
+            
+            # Calculate distance from user location
+            try:
+                import math
+                lat1, lon1 = user_location["latitude"], user_location["longitude"]
+                lat2, lon2 = store["latitude"], store["longitude"]
+                
+                # Haversine formula for distance
+                R = 6371
+                dlat = math.radians(lat2 - lat1)
+                dlon = math.radians(lon2 - lon1)
+                a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
+                c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+                distance = R * c
+                store["distance"] = round(distance, 2)
+            except:
+                store["distance"] = 0
+            
+            # Calculate ranking score: availability (70%) + stock (20%) + proximity (10%)
+            availability_score = store["availability_percentage"]
+            stock_score = min(store["total_stock"] / 10, 100)
+            proximity_score = max(100 - (store["distance"] * 10), 0)
+            
+            store["ranking_score"] = (availability_score * 0.7) + (stock_score * 0.2) + (proximity_score * 0.1)
+        
+        # Sort stores by ranking score (descending order)
+        ranked_stores = sorted(store_rankings.values(), key=lambda x: x["ranking_score"], reverse=True)
+        
+        print(f"🔍 DEBUG - Store rankings: {len(ranked_stores)} stores found")
+        
+        # Send enhanced results back to popup
+        emit("medicine_search_result", {
+            "success": True, 
+            "results": ranked_stores,
+            "search_summary": {
+                "medicines_requested": medicines,
+                "total_stores_found": len(ranked_stores),
+                "best_match": ranked_stores[0]["store_name"] if ranked_stores else "None"
+            }
+        })
+        
+    except Exception as e:
+        print(f"❌ ERROR in search_medicines: {str(e)}")
+        emit("medicine_search_result", {"error": str(e)})
+
+@socketio.on("send_message")
+def handle_message(data):
+    """
+    Handles incoming messages from the frontend.
+    Expects:
+    {
+      "thread_id": "<uuid>", 
+      "message": "<text>", 
+      "image": "data:image/jpeg;base64,...." (optional),
+      "location": {"latitude": 12.34, "longitude": 56.78} (optional),
+      "input_method": "text" | "voice" | "image" (optional)
+    }
+    """
+    thread_id = data.get("thread_id", str(uuid.uuid4()))
+    message = data.get("message", "")
+    image_data = data.get("image", None)
+    user_location = data.get("location", None)
+    input_method = data.get("input_method", "text")  # Default to text if not specified
+    
+    # DEBUG: Log what input method was received
+    print(f"DEBUG: Received input_method = '{input_method}' for message: '{message[:50]}...'")
+    
+    # Ensure consistent timestamping
+    timestamp = datetime.utcnow().isoformat()
+
+    # Save user message
+    try:
+        save_message(thread_id, "user", message, user_location)
+    except Exception:
+        # Non-fatal; continue
+        pass
+
+    # Emit back user message (so UI shows it immediately)
+    if message.strip() and image_data:
+        # Both text and image
+        message_content = message
+        message_data = {"role": "user", "content": message_content, "timestamp": timestamp, "image": image_data}
+    elif image_data:
+        # Image only
+        message_data = {"role": "user", "content": "📷 Uploaded prescription image", "timestamp": timestamp, "image": image_data}
+    else:
+        # Text only
+        message_data = {"role": "user", "content": message, "timestamp": timestamp}
+    
+    emit("message_received", message_data)
+
+    # PROCESS: image and/or text
+    try:
+        conversation_history = load_messages(thread_id)
+        raw_data = None
+        assistant_response = ""
+
+        if image_data:
+            # Extract base64 portion
+            image_base64 = image_data.split(",", 1)[1] if "," in image_data else image_data
+            prescription_data = analyze_prescription_image(image_base64)
+            
+            if prescription_data.get("medicines"):
+                meds = prescription_data["medicines"]
+                med_list = ", ".join(meds)
+                
+                # If user also sent a text message, process it with prescription context
+                if message.strip():
+                    # Create enhanced context with prescription info
+                    prescription_context = f"[Prescription Analysis: Found medicines: {med_list}]"
+                    enhanced_message = f"{message}\n\n{prescription_context}"
+                    
+                    # Process the user's text instruction with prescription context
+                    assistant_response, raw_data = asyncio.run(
+                        process_query(enhanced_message, None, conversation_history, user_location)
+                    )
+                else:
+                    # No text message, use default prescription response
+                    assistant_response = (
+                        f"I've analyzed your prescription and found **{med_list}**. "
+                        "How can I help you with these medicines? I can check availability, find nearby stores, or provide information about them. "
+                        "Always consult your doctor for medical advice.\n\n"
+                        f"[Context: Prescription contains: {med_list}]"
+                    )
+                
+                # Persist prescription analysis as assistant message
+                raw_data = json.dumps(prescription_data)
+            else:
+                assistant_response = "I couldn't identify medicines in this image. Please upload a clearer prescription image."
+        else:
+            # Text only - process normally
+            assistant_response, raw_data = asyncio.run(
+                process_query(message, None, conversation_history, user_location)
+            )
+
+        # Save assistant response
+        try:
+            save_message(thread_id, "assistant", assistant_response, None)
+        except Exception:
+            pass
+
+        # Stream the response in chunks instead of sending all at once
+        if assistant_response:
+            stream_response(assistant_response, thread_id, raw_data, user_location, conversation_history, input_method)
+
+    except Exception as e:
+        # Log error server-side and inform user politely
+        import traceback
+        traceback.print_exc()
+        emit("message_received", {"role": "assistant", "content": f"Sorry, I encountered an error: {str(e)}", "timestamp": datetime.utcnow().isoformat()})
+
+def stream_response(assistant_response, thread_id, raw_data, user_location, conversation_history, input_method="text"):
+    """Stream the assistant response with conditional AWS Polly voice synthesis"""
+    import time
+    
+    # Start streaming signal
+    emit("response_start", {"thread_id": thread_id})
+    
+    # Generate audio with AWS Polly ONLY if user used voice input
+    if polly_client and input_method == "voice":
+        try:
+            # Clean text for Polly (remove markdown)
+            clean_text = assistant_response.replace('**', '').replace('*', '').replace('`', '')
+            
+            polly_response = polly_client.synthesize_speech(
+                Text=clean_text,
+                OutputFormat='mp3',
+                VoiceId='Joanna',
+                Engine='neural'
+            )
+            
+            # Convert audio to base64 for transmission
+            audio_data = polly_response['AudioStream'].read()
+            audio_base64 = base64.b64encode(audio_data).decode('utf-8')
+            
+            # Send audio to frontend
+            emit("polly_audio_ready", {
+                "thread_id": thread_id,
+                "audio_data": audio_base64
+            })
+            
+            print(f"AWS Polly audio generated for voice input: {len(audio_data)} bytes")
+            
+        except Exception as e:
+            print(f"AWS Polly error: {e}")
+            # Fallback to browser TTS will be handled by frontend
+    elif input_method == "voice":
+        print(f"Voice input detected but Polly unavailable, frontend will use browser TTS")
+    else:
+        print(f"{input_method.title()} input - no voice synthesis needed")
+    
+    # Stream text chunks for visual effect
+    words = assistant_response.split()
+    chunk_size = 2
+    
+    for i in range(0, len(words), chunk_size):
+        chunk = " ".join(words[i:i + chunk_size])
+        if i + chunk_size < len(words):
+            chunk += " "
+        
+        emit("response_chunk", {
+            "thread_id": thread_id,
+            "chunk": chunk,
+            "is_final": False
+        })
+        
+        time.sleep(0.3)
+    
+    # Send completion signal
+    emit("response_complete", {
+        "thread_id": thread_id,
+        "full_content": assistant_response,
+        "timestamp": datetime.utcnow().isoformat()
+    })
+    
+    # Handle map data and title generation (same as before)
+    print(f"📡 DEBUG - Checking raw_data for map trigger: {raw_data is not None}")
+    if raw_data:
+        try:
+            print(f"📡 DEBUG - Raw data type: {type(raw_data)}")
+            if isinstance(raw_data, str):
+                parsed = json.loads(raw_data)
+            else:
+                parsed = raw_data
+            
+            print(f"📡 DEBUG - Parsed data type: {type(parsed)}, length: {len(parsed) if isinstance(parsed, list) else 'N/A'}")
+            
+            if isinstance(parsed, list) and parsed and isinstance(parsed[0], dict) and "latitude" in parsed[0]:
+                print(f"📡 DEBUG - Emitting show_map with {len(parsed)} stores")
+                emit("show_map", {"stores": parsed, "user_location": user_location})
+            else:
+                print(f"📡 DEBUG - Map conditions not met - list: {isinstance(parsed, list)}, has items: {bool(parsed) if isinstance(parsed, list) else False}, has latitude: {'latitude' in parsed[0] if isinstance(parsed, list) and parsed and isinstance(parsed[0], dict) else False}")
+        except Exception as e:
+            print(f"📡 DEBUG - Error parsing raw_data: {e}")
+    else:
+        print(f"📡 DEBUG - No raw_data provided")
+    
+    message_count = len(conversation_history)
+    if message_count <= 1 or message_count % 3 == 0:
+        try:
+            recent_messages = conversation_history[-3:] if len(conversation_history) >= 3 else conversation_history
+            title = generate_title(recent_messages)
+            update_thread_title(thread_id, title)
+            emit("title_updated", {"thread_id": thread_id, "title": title})
+        except Exception as e:
+            print(f"❌ Title generation failed: {e}")
+
+# -------------------------
+# CLI starter  
+# -------------------------
+@app.route("/api/route/<float:user_lat>/<float:user_lon>/<float:store_lat>/<float:store_lon>")
+def get_route(user_lat, user_lon, store_lat, store_lon):
+    """Get driving route between user and store"""
+    try:
+        import requests
+        
+        # Get route from OSRM
+        route_url = f"http://router.project-osrm.org/route/v1/driving/{user_lon},{user_lat};{store_lon},{store_lat}?overview=full&geometries=geojson"
+        response = requests.get(route_url, timeout=10)
+        
+        if response.status_code == 200:
+            route_data = response.json()
+            if route_data.get('routes'):
+                coords = route_data['routes'][0]['geometry']['coordinates']
+                route_coords = [[c[1], c[0]] for c in coords]  # Convert [lon,lat] to [lat,lon]
+                
+                distance = route_data['routes'][0]['distance'] / 1000  # km
+                duration = route_data['routes'][0]['duration'] / 60    # minutes
+                
+                return jsonify({
+                    "success": True,
+                    "route": route_coords,
+                    "distance": round(distance, 1),
+                    "duration": round(duration)
+                })
+        
+        return jsonify({"success": False, "error": "No route found"})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+@app.route("/api/map/<float:lat>/<float:lon>")
+def get_folium_map(lat, lon):
+    """Generate simple Folium map with click-to-show routes"""
+    try:
+        import folium
+        
+        # Create simple map
+        m = folium.Map(location=[lat, lon], zoom_start=13)
+        
+        # Add user marker
+        folium.Marker(
+            [lat, lon], 
+            popup="📍 Your Location",
+            icon=folium.Icon(color='red', icon='user', prefix='fa')
+        ).add_to(m)
+        
+        # Get nearby stores
+        result = asyncio.run(call_mcp_tool("medical-map", "get_nearby_stores", {
+            "latitude": lat, 
+            "longitude": lon, 
+            "limit": 5
+        }))
+        
+        # Add store markers with direct click-to-route
+        if result and result.startswith('['):
+            stores = json.loads(result)
+            route_colors = ['#2563eb', '#dc2626', '#059669', '#7c3aed', '#ea580c']
+            
+            for i, store in enumerate(stores):
+                color = route_colors[i % len(route_colors)]
+                
+                # Store marker popup (for hover info only)
+                popup_html = f"""
+                <div style="min-width: 220px; font-family: 'Segoe UI', sans-serif;">
+                    <div style="border-bottom: 2px solid {color}; padding-bottom: 8px; margin-bottom: 12px;">
+                        <h4 style="margin: 0; color: #1e293b; font-size: 16px; font-weight: 600;">{store['store_name']}</h4>
+                    </div>
+                    <div style="margin-bottom: 8px;">
+                        <p style="margin: 0; color: #64748b; font-size: 13px; line-height: 1.4;">
+                            <span style="color: {color};">📍</span> {store.get('address', 'Address not available')}
+                        </p>
+                    </div>
+                    <div style="margin-bottom: 8px;">
+                        <p style="margin: 0; color: #64748b; font-size: 13px;">
+                            <span style="color: #10b981;">📞</span> {store.get('phone_number', 'Phone not available')}
+                        </p>
+                    </div>
+                    <div style="background: {color}15; border: 1px solid {color}; padding: 8px; border-radius: 6px;">
+                        <p style="margin: 0; color: {color}; font-weight: 600; font-size: 13px;">
+                            <span style="color: #f59e0b;">📏</span> {store['distance']:.2f} km away
+                        </p>
+                        <p style="margin: 4px 0 0 0; color: #64748b; font-size: 11px; font-style: italic;">
+                            Click marker to show route
+                        </p>
+                    </div>
+                </div>
+                """
+                
+                folium.Marker(
+                    [store['latitude'], store['longitude']], 
+                    popup=folium.Popup(popup_html, max_width=280),
+                    tooltip=f"🏥 {store['store_name']} ({store['distance']:.1f}km) - Click for route",
+                    icon=folium.Icon(color='blue', icon='plus', prefix='fa')
+                ).add_to(m)
+        
+        # Get the HTML and inject JavaScript
+        html_content = m._repr_html_()
+        
+        # Add route handling JavaScript with store data
+        if result and result.startswith('['):
+            stores = json.loads(result)
+            stores_js = json.dumps([{
+                'lat': store['latitude'],
+                'lon': store['longitude'], 
+                'name': store['store_name'],
+                'color': route_colors[i % len(route_colors)]
+            } for i, store in enumerate(stores)])
+            
+            route_script = f"""
+            <script>
+                var currentRouteLayer = null;
+                var storeData = {stores_js};
+                var userLat = {lat};
+                var userLon = {lon};
+                
+                function showRouteToStore(storeLat, storeLon, storeName, color) {{
+                    // Get the map instance
+                    var mapElement = document.querySelector('.folium-map');
+                    if (!mapElement) return;
+                    
+                    var mapId = mapElement.id;
+                    var mapInstance = window[mapId];
+                    
+                    if (!mapInstance) return;
+                    
+                    // Clear existing route
+                    if (currentRouteLayer) {{
+                        mapInstance.removeLayer(currentRouteLayer);
+                        currentRouteLayer = null;
+                    }}
+                    
+                    // Fetch route from OSRM
+                    fetch('http://router.project-osrm.org/route/v1/driving/' + userLon + ',' + userLat + ';' + storeLon + ',' + storeLat + '?overview=full&geometries=geojson')
+                        .then(response => response.json())
+                        .then(data => {{
+                            if (data.routes && data.routes[0]) {{
+                                var coords = data.routes[0].geometry.coordinates;
+                                var routeCoords = coords.map(function(c) {{ return [c[1], c[0]]; }});
+                                
+                                // Add route to map
+                                currentRouteLayer = L.polyline(routeCoords, {{
+                                    color: color,
+                                    weight: 4,
+                                    opacity: 0.8
+                                }}).addTo(mapInstance);
+                                
+                                // Show route info
+                                var distance = (data.routes[0].distance / 1000).toFixed(1);
+                                var duration = Math.round(data.routes[0].duration / 60);
+                                
+                                currentRouteLayer.bindPopup(
+                                    '<div style="text-align: center; font-family: Segoe UI, sans-serif;">' +
+                                    '<h4 style="margin: 0 0 8px 0; color: ' + color + ';">Route to ' + storeName + '</h4>' +
+                                    '<p style="margin: 0; font-size: 13px;">🗺️ ' + distance + 'km, ' + duration + 'min drive</p>' +
+                                    '</div>'
+                                );
+                                
+                                // Fit map to show route
+                                mapInstance.fitBounds(currentRouteLayer.getBounds(), {{padding: [20, 20]}});
+                                
+                                console.log('Route displayed for:', storeName);
+                            }}
+                        }})
+                        .catch(function(error) {{
+                            console.error('Route error:', error);
+                            alert('Could not load route. Please try again.');
+                        }});
+                }}
+                
+                // Add click events to markers after map loads
+                function addMarkerClickEvents() {{
+                    var mapElement = document.querySelector('.folium-map');
+                    if (!mapElement) return;
+                    
+                    var mapId = mapElement.id;
+                    var mapInstance = window[mapId];
+                    
+                    if (!mapInstance) return;
+                    
+                    // Find all markers and add click events
+                    mapInstance.eachLayer(function(layer) {{
+                        if (layer instanceof L.Marker && layer.options.icon.options.icon === 'plus') {{
+                            var markerPos = layer.getLatLng();
+                            
+                            // Find matching store data
+                            var storeInfo = storeData.find(function(store) {{
+                                return Math.abs(store.lat - markerPos.lat) < 0.001 && 
+                                       Math.abs(store.lon - markerPos.lng) < 0.001;
+                            }});
+                            
+                            if (storeInfo) {{
+                                layer.off('click'); // Remove existing click events
+                                layer.on('click', function(e) {{
+                                    e.originalEvent.stopPropagation();
+                                    showRouteToStore(storeInfo.lat, storeInfo.lon, storeInfo.name, storeInfo.color);
+                                }});
+                            }}
+                        }}
+                    }});
+                    
+                    console.log('Direct click events added to store markers');
+                }}
+                
+                // Initialize when DOM is ready
+                document.addEventListener('DOMContentLoaded', function() {{
+                    setTimeout(function() {{
+                        addMarkerClickEvents();
+                        
+                        // Auto-show route to nearest store (first in list)
+                        if (storeData.length > 0) {{
+                            var nearestStore = storeData[0];
+                            showRouteToStore(nearestStore.lat, nearestStore.lon, nearestStore.name, nearestStore.color);
+                            console.log('Auto-displayed route to nearest store:', nearestStore.name);
+                        }}
+                        
+                        console.log('Direct click-to-route system initialized');
+                    }}, 1500);
+                }});
+            </script>
+            """
+        else:
+            route_script = ""
+        
+        # Insert script into the HTML
+        if '</body>' in html_content:
+            html_content = html_content.replace('</body>', route_script + '</body>')
+        elif '&lt;/body&gt;' in html_content:
+            # Handle iframe srcdoc encoding
+            encoded_script = route_script.replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;').replace("'", '&#x27;')
+            html_content = html_content.replace('&lt;/body&gt;', encoded_script + '&lt;/body&gt;')
+        
+        return html_content
+    except Exception as e:
+        return f"<div>Error loading map: {str(e)}</div>"
+
+# -------------------------
+# Authentication Routes
+# -------------------------
+@app.route('/api/auth/register', methods=['POST'])
+def register():
+    """User registration"""
+    try:
+        data = request.get_json()
+        email = data.get('email')
+        password = data.get('password')
+        full_name = data.get('full_name')
+        phone = data.get('phone')
+        
+        # Validation
+        if not email or not password:
+            return jsonify({'error': 'Email and password are required'}), 400
+        
+        # Check if user exists
+        existing_user = User.find_by_email(email)
+        if existing_user:
+            return jsonify({'error': 'User already exists'}), 400
+        
+        # Create new user
+        user = User(email=email, full_name=full_name, phone=phone)
+        user.password_hash = User.hash_password(password)
+        
+        if user.save():
+            # Create access token
+            access_token = create_access_token(identity=user.user_id)
+            return jsonify({
+                'message': 'User registered successfully',
+                'access_token': access_token,
+                'user': user.to_dict()
+            }), 201
+        else:
+            return jsonify({'error': 'Registration failed'}), 500
+            
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/auth/login', methods=['POST'])
+def login():
+    """User login"""
+    try:
+        data = request.get_json()
+        email = data.get('email')
+        password = data.get('password')
+        
+        if not email or not password:
+            return jsonify({'error': 'Email and password are required'}), 400
+        
+        # Find user
+        user = User.find_by_email(email)
+        if not user or not User.check_password(password, user.password_hash):
+            return jsonify({'error': 'Invalid credentials'}), 401
+        
+        # Create access token
+        access_token = create_access_token(identity=user.user_id)
+        return jsonify({
+            'message': 'Login successful',
+            'access_token': access_token,
+            'user': user.to_dict()
+        }), 200
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/auth/profile', methods=['GET'])
+@jwt_required()
+def get_profile():
+    """Get user profile"""
+    try:
+        user_id = get_jwt_identity()
+        user = User.find_by_id(user_id)
+        
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        return jsonify({'user': user.to_dict()}), 200
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# -------------------------
+# Cart Management Routes
+# -------------------------
+@app.route('/api/cart', methods=['GET'])
+@jwt_required()
+def get_cart():
+    """Get user's cart"""
+    try:
+        user_id = get_jwt_identity()
+        cart = Cart(user_id)
+        items = cart.get_items()
+        
+        return jsonify({
+            'items': items,
+            'total_amount': cart.total_amount,
+            'item_count': cart.get_item_count()
+        }), 200
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/cart/add', methods=['POST'])
+@jwt_required()
+def add_to_cart_api():
+    """Add item to cart"""
+    try:
+        user_id = get_jwt_identity()
+        data = request.get_json()
+        
+        # Handle both ID-based and name-based requests
+        medicine_id = data.get('medicine_id')
+        store_id = data.get('store_id')
+        medicine_name = data.get('medicine_name')
+        store_name = data.get('store_name')
+        quantity = data.get('quantity', 1)
+        unit_price = data.get('unit_price')
+        
+        # If IDs not provided, look them up by names
+        if not medicine_id and medicine_name:
+            result = asyncio.run(call_mcp_tool("medical-database", "execute_sql", {
+                "sql_query": f"SELECT medicine_id FROM medicines WHERE medicine_name LIKE '%{medicine_name}%' LIMIT 1"
+            }))
+            if result and result.startswith('['):
+                medicines = json.loads(result)
+                if medicines:
+                    medicine_id = medicines[0]['medicine_id']
+        
+        if not store_id and store_name:
+            result = asyncio.run(call_mcp_tool("medical-database", "execute_sql", {
+                "sql_query": f"SELECT store_id FROM medical_stores WHERE store_name LIKE '%{store_name}%' LIMIT 1"
+            }))
+            if result and result.startswith('['):
+                stores = json.loads(result)
+                if stores:
+                    store_id = stores[0]['store_id']
+        
+        if not all([medicine_id, store_id, unit_price]):
+            return jsonify({'error': 'Missing required fields or could not find medicine/store'}), 400
+        
+        cart = Cart(user_id)
+        if cart.add_item(medicine_id, store_id, quantity, unit_price):
+            return jsonify({'message': 'Item added to cart'}), 200
+        else:
+            return jsonify({'error': 'Failed to add item'}), 500
+            
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/cart/update', methods=['PUT'])
+@jwt_required()
+def update_cart_item():
+    """Update cart item quantity"""
+    try:
+        data = request.get_json()
+        item_id = data.get('item_id')
+        quantity = data.get('quantity')
+        
+        if not item_id or quantity is None:
+            return jsonify({'error': 'Item ID and quantity required'}), 400
+        
+        user_id = get_jwt_identity()
+        cart = Cart(user_id)
+        
+        if cart.update_quantity(item_id, quantity):
+            return jsonify({'message': 'Cart updated'}), 200
+        else:
+            return jsonify({'error': 'Failed to update cart'}), 500
+            
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/cart/remove', methods=['DELETE'])
+@jwt_required()
+def remove_from_cart():
+    """Remove item from cart"""
+    try:
+        data = request.get_json()
+        item_id = data.get('item_id')
+        
+        if not item_id:
+            return jsonify({'error': 'Item ID required'}), 400
+        
+        user_id = get_jwt_identity()
+        cart = Cart(user_id)
+        
+        if cart.remove_item(item_id):
+            return jsonify({'message': 'Item removed'}), 200
+        else:
+            return jsonify({'error': 'Failed to remove item'}), 500
+            
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# -------------------------
+# Payment Routes
+# -------------------------
+@app.route('/api/payment/create-order', methods=['POST'])
+@jwt_required()
+def create_payment_order():
+    """Create Razorpay order for payment"""
+    try:
+        user_id = get_jwt_identity()
+        data = request.get_json()
+        
+        amount = data.get('amount')  # Amount in rupees
+        address_data = data.get('address')
+        
+        if not amount or not address_data:
+            return jsonify({'error': 'Amount and address required'}), 400
+        
+        # Create Razorpay order
+        razorpay_order = razorpay_client.order.create({
+            'amount': int(amount * 100),  # Amount in paise
+            'currency': 'INR',
+            'payment_capture': 1
+        })
+        
+        # Save address to database (simplified for now)
+        # In production, you'd save to user_addresses table
+        
+        return jsonify({
+            'success': True,
+            'order_id': razorpay_order['id'],
+            'amount': amount,
+            'currency': 'INR',
+            'key_id': os.getenv("RAZORPAY_KEY_ID")
+        }), 200
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/payment/verify', methods=['POST'])
+@jwt_required()
+def verify_payment():
+    """Verify Razorpay payment and create order"""
+    try:
+        user_id = get_jwt_identity()
+        data = request.get_json()
+        
+        razorpay_order_id = data.get('razorpay_order_id')
+        razorpay_payment_id = data.get('razorpay_payment_id')
+        razorpay_signature = data.get('razorpay_signature')
+        address_data = data.get('address')
+        
+        # Verify payment signature
+        params_dict = {
+            'razorpay_order_id': razorpay_order_id,
+            'razorpay_payment_id': razorpay_payment_id,
+            'razorpay_signature': razorpay_signature
+        }
+        
+        razorpay_client.utility.verify_payment_signature(params_dict)
+        
+        # Payment verified successfully
+        # Get cart items before clearing
+        cart = Cart(user_id)
+        cart_items = cart.get_items()
+        
+        if not cart_items:
+            return jsonify({'error': 'Cart is empty'}), 400
+        
+        # Create order using Order model
+        order = Order(user_id)
+        payment_data = {
+            'razorpay_order_id': razorpay_order_id,
+            'razorpay_payment_id': razorpay_payment_id
+        }
+        
+        if order.create_order(cart_items, address_data, payment_data):
+            # Clear cart after successful order
+            cart.clear_cart()
+            
+            return jsonify({
+                'success': True,
+                'message': 'Payment successful and order created',
+                'order_id': order.order_id,
+                'payment_id': razorpay_payment_id
+            }), 200
+        else:
+            return jsonify({'error': 'Failed to create order'}), 500
+        
+    except razorpay.errors.SignatureVerificationError:
+        return jsonify({'error': 'Payment verification failed'}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# -------------------------
+# Order Management Routes
+# -------------------------
+@app.route('/api/orders', methods=['GET'])
+@jwt_required()
+def get_user_orders():
+    """Get user's order history"""
+    try:
+        user_id = get_jwt_identity()
+        orders = Order.get_user_orders(user_id)
+        return jsonify({'orders': orders}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/orders/<order_id>', methods=['GET'])
+@jwt_required()
+def get_order_details(order_id):
+    """Get detailed order information"""
+    try:
+        user_id = get_jwt_identity()
+        order_details = Order.get_order_details(order_id, user_id)
+        
+        if order_details:
+            return jsonify({'order': order_details}), 200
+        else:
+            return jsonify({'error': 'Order not found'}), 404
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# -------------------------
+# Enhanced SocketIO Handlers for E-commerce
+# -------------------------
+@socketio.on("add_to_cart")
+def handle_add_to_cart_socket(data):
+    """Add item to cart via SocketIO (for logged-in users)"""
+    try:
+        # For now, we'll use session-based cart for non-authenticated users
+        # In production, you'd want to require authentication
+        
+        medicine_id = data.get("medicine_id")
+        store_id = data.get("store_id")
+        quantity = data.get("quantity", 1)
+        unit_price = data.get("unit_price")
+        medicine_name = data.get("medicine_name", "Unknown Medicine")
+        store_name = data.get("store_name", "Unknown Store")
+        
+        # For demo purposes, we'll emit success
+        # In production, integrate with user authentication
+        emit("cart_updated", {
+            "success": True,
+            "message": f"Added {medicine_name} to cart",
+            "item_count": 1  # This would be actual count from database
+        })
+        
+    except Exception as e:
+        emit("cart_updated", {
+            "success": False,
+            "error": str(e)
+        })
+
+if __name__ == "__main__":
+    print("Starting MedAI on http://localhost:5000")
+    # Disable debug mode to prevent constant restarts that break SocketIO sessions
+    socketio.run(app, debug=False, host="0.0.0.0", port=5000, allow_unsafe_werkzeug=True)
