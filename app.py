@@ -49,7 +49,7 @@ PYTHON_PATH = sys.executable
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "medai_secret_key_2024")
 app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY", "medai_jwt_secret_2024")
-app.config["JWT_ACCESS_TOKEN_EXPIRES"] = False  # Never expire (or set to timedelta for specific time)
+app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=int(os.getenv("JWT_ACCESS_TOKEN_EXPIRES_HOURS", "24")))
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 # Initialize JWT
