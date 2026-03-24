@@ -83,6 +83,8 @@ def analyze_pr(pr_url: str, bedrock_client: BedrockClient, report_gen: MarkdownR
     pr_number = pr_info['number']
     print(f"📋 PR #{pr_number}: {pr_info['title']}")
     
+    context_mgr = PRContextManager(pr_number)
+    
     # Extract Jira ticket from PR title
     jira_extractor = JiraTicketExtractor()
     ticket_info = jira_extractor.extract_and_fetch(pr_info['title'])
@@ -133,8 +135,9 @@ def analyze_pr(pr_url: str, bedrock_client: BedrockClient, report_gen: MarkdownR
         
         findings = results.get('findings', [])
         changed_line_numbers = {cl['line_number'] for cl in changed_lines}
-        relevant_findings = [
-            f for f in findings 
+        is_new_file = file_info.get('status') == 'added' or len(changed_line_numbers) == len(code.splitlines())
+        relevant_findings = findings if is_new_file else [
+            f for f in findings
             if any(f.get('line_start', 0) <= ln <= f.get('line_end', 0) for ln in changed_line_numbers)
         ]
         
