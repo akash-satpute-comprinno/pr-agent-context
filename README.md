@@ -66,8 +66,6 @@ user_location = {"latitude": 18.566039, "longitude": 73.766370}
 ### MCP Integration
 - `medical-database` - SQL queries for medicines and stores
 - `medical-map` - Location and mapping services
-- `prescription-analyzer` - Image analysis for prescriptions
+- `prescrption-analyzer` - Image analysis for prescriptions
 
-## License
 
-MIT License
