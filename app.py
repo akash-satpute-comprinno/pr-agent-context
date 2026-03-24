@@ -62,7 +62,7 @@ try:
 except Exception as e:
     print(f"Razorpay initialization failed: {e}")
     razorpay_client = None
-
+Hi hello
 # Initialize AWS Polly client with .env credentials
 try:
     aws_access_key = os.getenv("AWS_ACCESS_KEY_ID")
