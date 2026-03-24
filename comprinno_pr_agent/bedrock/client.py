@@ -10,17 +10,18 @@ from context_manager import PRContextManager
 class BedrockClient:
     def __init__(self):
         # Use provided AWS credentials for Bedrock
-        self.region = 'us-east-1'
-        self.model_id = 'amazon.nova-pro-v1:0'
+        self.region = os.getenv('AWS_REGION', 'ap-south-1')
+        self.model_id = os.getenv('BEDROCK_MODEL', 'amazon.nova-pro-v1:0')
         self.temperature = 0.3
         self.max_tokens = 4096
         
+        session_token = os.getenv('AWS_SESSION_TOKEN')
         self.client = boto3.client(
             service_name='bedrock-runtime',
             region_name=self.region,
             aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
             aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
-            aws_session_token=os.getenv('AWS_SESSION_TOKEN')
+            **({"aws_session_token": session_token} if session_token else {})
         )
         
         # Context manager will be initialized per PR in analyze_pr
