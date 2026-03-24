@@ -1,4 +1,4 @@
-# User authentication service
+# User authentication service - partial fix
 import hashlib
 import sqlite3
 
@@ -6,9 +6,8 @@ def authenticate_user(username, password):
     conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
     
-    # BUG: SQL injection vulnerability - using string concatenation
-    query = "SELECT * FROM users WHERE username = '" + username + "' AND password = '" + password + "'"
-    cursor.execute(query)
+    # FIXED: using parameterized query to prevent SQL injection
+    cursor.execute("SELECT * FROM users WHERE username = ? AND password = ?", (username, password))
     user = cursor.fetchone()
     conn.close()
     
@@ -25,7 +24,7 @@ def get_all_users():
     return users
 
 def reset_password(user_id, new_password):
-    # BUG: password stored as plain text, no hashing
+    # BUG: password still stored as plain text, no hashing
     conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
     cursor.execute("UPDATE users SET password = ? WHERE id = ?", (new_password, user_id))
@@ -35,7 +34,7 @@ def reset_password(user_id, new_password):
 def delete_user(user_id):
     conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
-    # BUG: SQL injection - user_id concatenated directly
+    # BUG: still using string concatenation here
     cursor.execute("DELETE FROM users WHERE id = " + str(user_id))
     conn.commit()
     conn.close()
