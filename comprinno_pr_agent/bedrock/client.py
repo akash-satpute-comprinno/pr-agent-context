@@ -10,8 +10,8 @@ from context_manager import PRContextManager
 class BedrockClient:
     def __init__(self):
         # Use provided AWS credentials for Bedrock
-        self.region = 'us-east-1'
-        self.model_id = 'amazon.nova-pro-v1:0'
+        self.region = os.getenv('AWS_REGION', 'ap-south-1')
+        self.model_id = os.getenv('BEDROCK_MODEL', 'apac.amazon.nova-pro-v1:0')
         self.temperature = 0.3
         self.max_tokens = 4096
         
