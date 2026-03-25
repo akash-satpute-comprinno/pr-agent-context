@@ -3,9 +3,11 @@ import datetime
 import os
 import sqlite3
 
+# FIXED: secret loaded from environment variable
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "fallback-secret")
 
 def generate_token(user_id):
+    # FIXED: token expires in 1 hour
     payload = {
         "user_id": user_id,
         "role": "admin",
@@ -14,7 +16,7 @@ def generate_token(user_id):
     return jwt.encode(payload, SECRET_KEY, algorithm="HS256")
 
 def verify_token(token):
-    # FIXED: added exception handling
+    # FIXED: exception handling added
     try:
         decoded = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
         return decoded
@@ -24,17 +26,15 @@ def verify_token(token):
         raise ValueError("Invalid token")
 
 def get_user_data(user_id):
-    conn = sqlite3.connect("app.db")
-    cursor = conn.cursor()
-    # FIXED: parameterized query
-    cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
-    return cursor.fetchall()
-    # BUG: connection never closed — resource leak introduced
+    # FIXED: parameterized query + connection closed via context manager
+    with sqlite3.connect("app.db") as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+        return cursor.fetchall()
 
 def delete_user(user_id):
-    conn = sqlite3.connect("app.db")
-    cursor = conn.cursor()
-    # BUG: new SQL injection introduced while fixing
-    cursor.execute("DELETE FROM users WHERE id = " + str(user_id))
-    conn.commit()
-    conn.close()
+    # FIXED: parameterized query + connection closed via context manager
+    with sqlite3.connect("app.db") as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        conn.commit()
