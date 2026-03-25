@@ -109,6 +109,7 @@ def analyze_pr(pr_url: str, bedrock_client: BedrockClient, report_gen: MarkdownR
     print(f"\n📁 Found {len(pr_files)} changed file(s)")
     
     all_findings = []
+    ticket_completion = {"done": [], "not_done": [], "partial": []}
     
     for file_info in pr_files:
         filename = file_info['filename']
@@ -132,6 +133,11 @@ def analyze_pr(pr_url: str, bedrock_client: BedrockClient, report_gen: MarkdownR
         
         if 'error' in results:
             continue
+
+        # Collect ticket completion from each file analysis (merge lists)
+        tc = results.get('ticket_completion', {})
+        for key in ['done', 'not_done', 'partial']:
+            ticket_completion[key].extend(tc.get(key, []))
         
         findings = results.get('findings', [])
         changed_line_numbers = {cl['line_number'] for cl in changed_lines}
@@ -173,7 +179,7 @@ def analyze_pr(pr_url: str, bedrock_client: BedrockClient, report_gen: MarkdownR
     
     # Post consolidated comment
     print(f"\n📝 Generating report...")
-    summary = generate_pr_summary(pr_info, pr_files, all_findings, previous_comments, ticket_info=ticket_info, previous_findings=previous_findings)
+    summary = generate_pr_summary(pr_info, pr_files, all_findings, previous_comments, ticket_info=ticket_info, previous_findings=previous_findings, ticket_completion=ticket_completion)
     github.post_summary_comment(summary)
     
     print(f"\n✅ Analysis complete! Found {len(all_findings)} issue(s)")
@@ -224,7 +230,7 @@ def parse_previous_findings(comments: list) -> list:
     return summary
 
 
-def generate_pr_summary(pr_info: dict, files: List, findings: List, previous_comments: List = None, ticket_info: dict = None, previous_findings: list = None) -> str:
+def generate_pr_summary(pr_info: dict, files: List, findings: List, previous_comments: List = None, ticket_info: dict = None, previous_findings: list = None, ticket_completion: dict = None) -> str:
     """Generate consolidated PR summary comment with ticket details"""
     critical = sum(1 for f in findings if f.get('severity') == 'Critical')
     warning = sum(1 for f in findings if f.get('severity') == 'Warning')
@@ -269,7 +275,26 @@ def generate_pr_summary(pr_info: dict, files: List, findings: List, previous_com
         summary += f"- ✅ Checked {len(files)} changed files\n"
         summary += f"- ✅ Validated code quality and best practices\n"
         summary += f"- ✅ Found {len(findings)} issue(s)\n\n"
-    
+
+        # Ticket completion status
+        if ticket_completion and any(ticket_completion.values()):
+            summary += f"### 📋 Jira Ticket Completion — {ticket_info['ticket_id']}\n\n"
+            summary += f"**Ticket:** {ticket_info['title']}\n\n"
+            if ticket_completion.get('done'):
+                summary += f"**✅ Done:**\n"
+                for item in ticket_completion['done']:
+                    summary += f"- {item}\n"
+                summary += "\n"
+            if ticket_completion.get('partial'):
+                summary += f"**⚠️ Partially Done:**\n"
+                for item in ticket_completion['partial']:
+                    summary += f"- {item}\n"
+                summary += "\n"
+            if ticket_completion.get('not_done'):
+                summary += f"**❌ Not Yet Done:**\n"
+                for item in ticket_completion['not_done']:
+                    summary += f"- {item}\n"
+                summary += "\n"    
     if findings:
         summary += f"### Issues Found\n\n"
         
