@@ -22,24 +22,22 @@ from cli import analyze_pr, load_env
 
 
 def get_previous_comments_context(github: GitHubProvider) -> str:
-    """Extract previous agent comments as context — last 2 meaningful reviews only"""
+    """Extract all previous agent comments as context string for Bedrock"""
     previous_comments = github.get_previous_agent_comments()
     if not previous_comments:
         return ""
 
-    context = "PREVIOUS REVIEW CONTEXT (last 2 reviews — do not repeat resolved issues):\n\n"
+    context = "PREVIOUS REVIEW CONTEXT (all past reviews — do not repeat resolved issues):\n\n"
     total_chars = 0
-    count = 0
-    for comment in previous_comments:
+    for i, comment in enumerate(previous_comments):
         body = comment['body']
         if 'No Issues Found' in body or 'Total Issues | 0' in body:
             continue
-        chunk = f"--- Review ---\n{body[:1500]}\n\n"
+        chunk = f"--- Review {i+1} ---\n{body[:1000]}\n\n"
+        if total_chars + len(chunk) > 4000:
+            break
         context += chunk
         total_chars += len(chunk)
-        count += 1
-        if count >= 2:  # only last 2 meaningful reviews
-            break
 
     return context if total_chars > 0 else ""
 
