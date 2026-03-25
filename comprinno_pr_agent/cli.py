@@ -110,6 +110,7 @@ def analyze_pr(pr_url: str, bedrock_client: BedrockClient, report_gen: MarkdownR
     
     all_findings = []
     ticket_completion = {"done": [], "not_done": [], "partial": []}
+    all_resolved_issues = []
     
     for file_info in pr_files:
         filename = file_info['filename']
@@ -138,6 +139,9 @@ def analyze_pr(pr_url: str, bedrock_client: BedrockClient, report_gen: MarkdownR
         tc = results.get('ticket_completion', {})
         for key in ['done', 'not_done', 'partial']:
             ticket_completion[key].extend(tc.get(key, []))
+
+        # Collect resolved issues
+        all_resolved_issues.extend(results.get('resolved_issues', []))
         
         findings = results.get('findings', [])
         changed_line_numbers = {cl['line_number'] for cl in changed_lines}
@@ -179,7 +183,7 @@ def analyze_pr(pr_url: str, bedrock_client: BedrockClient, report_gen: MarkdownR
     
     # Post consolidated comment
     print(f"\n📝 Generating report...")
-    summary = generate_pr_summary(pr_info, pr_files, all_findings, previous_comments, ticket_info=ticket_info, previous_findings=previous_findings, ticket_completion=ticket_completion)
+    summary = generate_pr_summary(pr_info, pr_files, all_findings, previous_comments, ticket_info=ticket_info, previous_findings=previous_findings, ticket_completion=ticket_completion, resolved_issues=all_resolved_issues)
     github.post_summary_comment(summary)
     
     print(f"\n✅ Analysis complete! Found {len(all_findings)} issue(s)")
@@ -230,7 +234,7 @@ def parse_previous_findings(comments: list) -> list:
     return summary
 
 
-def generate_pr_summary(pr_info: dict, files: List, findings: List, previous_comments: List = None, ticket_info: dict = None, previous_findings: list = None, ticket_completion: dict = None) -> str:
+def generate_pr_summary(pr_info: dict, files: List, findings: List, previous_comments: List = None, ticket_info: dict = None, previous_findings: list = None, ticket_completion: dict = None, resolved_issues: list = None) -> str:
     """Generate consolidated PR summary comment with ticket details"""
     critical = sum(1 for f in findings if f.get('severity') == 'Critical')
     warning = sum(1 for f in findings if f.get('severity') == 'Warning')
@@ -294,7 +298,14 @@ def generate_pr_summary(pr_info: dict, files: List, findings: List, previous_com
                 summary += f"**❌ Not Yet Done:**\n"
                 for item in ticket_completion['not_done']:
                     summary += f"- {item}\n"
-                summary += "\n"    
+                summary += "\n"
+
+    # Resolved issues from previous review
+    if resolved_issues:
+        summary += f"### ✅ Resolved Since Last Review\n\n"
+        for issue in resolved_issues:
+            summary += f"- **{issue.get('category')}** — {issue.get('description')}\n"
+        summary += "\n"
     if findings:
         summary += f"### Issues Found\n\n"
         
