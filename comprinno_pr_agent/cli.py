@@ -239,7 +239,7 @@ def analyze_pr(pr_url: str, bedrock_client: BedrockClient, report_gen: MarkdownR
 
 
 def parse_previous_findings(comments: list) -> list:
-    """Extract previously flagged issues from ALL agent comments (deduplicated)"""
+    """Extract previously flagged issues from ALL agent comments (deduplicated by category)"""
     if not comments:
         return []
 
@@ -247,21 +247,38 @@ def parse_previous_findings(comments: list) -> list:
     seen = set()
     findings = []
 
-    # Scan all comments, newest first
     for comment in comments:
         body = comment['body']
-        for match in re.finditer(r'\d+\.\s+\*\*(.+?)\*\*\s+\(Line\s+(\w+)\)\s*\n\s+(.+?)(?=\n|$)', body):
+        # Match findings with description and optional code snippet
+        for match in re.finditer(
+            r'\d+\.\s+\*\*(.+?)\*\*\s+\(Line\s+(\w+)\)\s*\n\s+\*\*Issue:\*\*\s+(.+?)(?:\n\s+\*\*.*?\*\*.*?)*?(?:\*\*Suggested fix:\*\*\s*```\w*\n(.*?)```)?',
+            body, re.DOTALL
+        ):
             category = match.group(1).strip()
-            line = match.group(2).strip()
-            description = match.group(3).strip().rstrip('.')
-            key = (category, line)
-            if key not in seen:
-                seen.add(key)
-                findings.append({
-                    'category': category,
-                    'line': line,
-                    'description': description
-                })
+            if category in seen:
+                continue
+            seen.add(category)
+            findings.append({
+                'category': category,
+                'line': match.group(2).strip(),
+                'description': match.group(3).strip()[:200],
+                'code_snippet': match.group(4).strip() if match.group(4) else ''
+            })
+
+    # Fallback: simpler pattern for older comment format
+    if not findings:
+        for comment in comments:
+            body = comment['body']
+            for match in re.finditer(r'\d+\.\s+\*\*(.+?)\*\*\s+\(Line\s+(\w+)\)\s*\n\s+(.+?)(?=\n|$)', body):
+                category = match.group(1).strip()
+                if category not in seen:
+                    seen.add(category)
+                    findings.append({
+                        'category': category,
+                        'line': match.group(2).strip(),
+                        'description': match.group(3).strip().rstrip('.'),
+                        'code_snippet': ''
+                    })
 
     return findings
 
