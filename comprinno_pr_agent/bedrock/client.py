@@ -174,11 +174,11 @@ The following issues were flagged across all previous reviews of this PR:
 
 Instructions:
 1. For EVERY issue listed above that exists in this file, check its current status:
-   - If FIXED CORRECTLY: add to "resolved_issues" with verification that the fix is correct and complete.
-   - If FIXED INCORRECTLY or REGRESSION (was fixed but broken again): raise as a new Critical finding explaining what's wrong.
-   - If NOT FIXED: raise as a finding.
-2. Also check for NEW issues not in the list above.
-3. Be thorough — re-verify every previously flagged issue in this file, not just recent ones.
+   - If FIXED CORRECTLY: add to "resolved_issues" ONLY. Do NOT add to "findings".
+   - If FIXED INCORRECTLY or REGRESSION: add to "findings" as a new Critical issue explaining what's wrong.
+   - If NOT FIXED: add to "findings" as before.
+2. Also check for NEW issues not in the list above and add to "findings".
+3. NEVER add a resolved/correctly-fixed issue to "findings".
 
 """
 
