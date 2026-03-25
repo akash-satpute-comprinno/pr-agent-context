@@ -154,9 +154,12 @@ Acceptance Criteria:
 {ac}
 
 Based on the full ticket (title, description, acceptance criteria), analyze the code and determine:
-1. What requirements from the ticket are DONE in this code
+1. What requirements are DONE — and verify the implementation is correct, complete and follows best practices
 2. What requirements are NOT YET implemented
-3. What requirements are PARTIALLY implemented
+3. What requirements are PARTIALLY implemented — explain what's missing
+
+For DONE items: if the implementation has flaws (e.g. insecure fallback, wrong approach), mark as PARTIAL instead.
+Be specific — reference actual code lines and variable names in your evaluation.
 
 Return this in the "ticket_completion" field of the JSON response.
 
@@ -303,9 +306,9 @@ Return your analysis as JSON:
     }}
   ],
   "ticket_completion": {{
-    "done": ["list of ticket requirements that are fully implemented in this code"],
-    "not_done": ["list of ticket requirements that are missing or not yet implemented"],
-    "partial": ["list of ticket requirements that are partially implemented"]
+    "done": ["requirement — verified correct: explanation of how it's implemented and why it's correct"],
+    "not_done": ["requirement — what needs to be implemented"],
+    "partial": ["requirement — what was done vs what's still missing"]
   }}
 }}
 
