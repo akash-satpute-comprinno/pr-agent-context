@@ -292,15 +292,38 @@ class JiraProvider:
         
         return None
     
+    def _extract_text_from_adf(self, adf) -> str:
+        """Extract plain text from Atlassian Document Format (ADF)"""
+        if not adf:
+            return ''
+        if isinstance(adf, str):
+            return adf
+        if not isinstance(adf, dict):
+            return str(adf)
+
+        text_parts = []
+        content = adf.get('content', [])
+        for block in content:
+            block_type = block.get('type', '')
+            if block_type in ('paragraph', 'heading', 'bulletList', 'orderedList', 'listItem', 'blockquote'):
+                for inline in block.get('content', []):
+                    if inline.get('type') == 'text':
+                        text_parts.append(inline.get('text', ''))
+                    elif inline.get('type') in ('listItem', 'bulletList', 'orderedList'):
+                        text_parts.append(self._extract_text_from_adf(inline))
+                text_parts.append('\n')
+        return ''.join(text_parts).strip()
+
     def _format_issue(self, issue: Dict) -> Dict[str, Any]:
         """Format raw Jira issue data into simplified structure"""
         fields = issue.get('fields', {})
-        
+        raw_description = fields.get('description', '')
+
         return {
             'key': issue.get('key'),
             'id': issue.get('id'),
             'summary': fields.get('summary', ''),
-            'description': fields.get('description', ''),
+            'description': self._extract_text_from_adf(raw_description),
             'status': fields.get('status', {}).get('name', ''),
             'status_category': fields.get('status', {}).get('statusCategory', {}).get('name', ''),
             'issue_type': fields.get('issuetype', {}).get('name', ''),
