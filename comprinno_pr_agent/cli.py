@@ -260,9 +260,9 @@ def parse_previous_findings(comments: list) -> list:
                 continue
             seen.add(category)
 
-            # Extract code snippet from ```python block after this finding
+            # Extract problematic code snippet from **Problematic code:** block
             desc_end = match.end()
-            snippet_match = re.search(r'```python\n(.*?)```', body[desc_end:desc_end+800], re.DOTALL)
+            snippet_match = re.search(r'\*\*Problematic code:\*\*\s*```\w*\n\s*(.*?)```', body[desc_end:desc_end+1000], re.DOTALL)
             snippet = snippet_match.group(1).strip() if snippet_match else ''
 
             findings.append({
@@ -426,6 +426,8 @@ def generate_pr_summary(pr_info: dict, files: List, findings: List, previous_com
                         summary += f"   **Why it matters:** {finding.get('why_it_matters')}\n\n"
                     if finding.get('how_to_fix'):
                         summary += f"   **How to fix:** {finding.get('how_to_fix')}\n\n"
+                    if finding.get('code_snippet'):
+                        summary += f"   **Problematic code:**\n   ```python\n   {finding.get('code_snippet')}\n   ```\n\n"
                     if finding.get('code_example'):
                         summary += f"   **Suggested fix:**\n   ```python\n   {finding.get('code_example')}\n   ```\n\n"
                 
