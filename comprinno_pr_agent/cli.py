@@ -239,22 +239,30 @@ def analyze_pr(pr_url: str, bedrock_client: BedrockClient, report_gen: MarkdownR
 
 
 def parse_previous_findings(comments: list) -> list:
-    """Extract previously flagged issues from the last agent comment"""
+    """Extract previously flagged issues from ALL agent comments (deduplicated)"""
     if not comments:
         return []
-    
-    last_comment = comments[0]['body']  # most recent first
-    findings = []
-    
+
     import re
-    # Matches: "1. **Category** (Line 45)\n   description..."
-    for match in re.finditer(r'\d+\.\s+\*\*(.+?)\*\*\s+\(Line\s+(\w+)\)\s*\n\s+(.+?)(?=\n|$)', last_comment):
-        findings.append({
-            'category': match.group(1).strip(),
-            'line': match.group(2).strip(),
-            'description': match.group(3).strip().rstrip('.')
-        })
-    
+    seen = set()
+    findings = []
+
+    # Scan all comments, newest first
+    for comment in comments:
+        body = comment['body']
+        for match in re.finditer(r'\d+\.\s+\*\*(.+?)\*\*\s+\(Line\s+(\w+)\)\s*\n\s+(.+?)(?=\n|$)', body):
+            category = match.group(1).strip()
+            line = match.group(2).strip()
+            description = match.group(3).strip().rstrip('.')
+            key = (category, line)
+            if key not in seen:
+                seen.add(key)
+                findings.append({
+                    'category': category,
+                    'line': line,
+                    'description': description
+                })
+
     return findings
 
 
