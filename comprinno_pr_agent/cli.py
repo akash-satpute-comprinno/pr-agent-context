@@ -208,18 +208,10 @@ def analyze_pr(pr_url: str, bedrock_client: BedrockClient, report_gen: MarkdownR
             line = finding.get('line_start')
             if not line:
                 continue
-            # Only comment on lines that are in the diff
             if line not in changed_line_numbers and not is_new_file:
                 continue
             severity_emoji = {'Critical': '🔴', 'Warning': '🟡', 'Info': '🔵'}.get(finding.get('severity'), '⚪')
-            inline_body = (
-                f"{severity_emoji} **{finding.get('category')}** ({finding.get('severity')})\n\n"
-                f"{finding.get('description', '')}\n\n"
-                f"**Why it matters:** {finding.get('why_it_matters', '')}\n\n"
-                f"**How to fix:**\n{finding.get('how_to_fix', '')}"
-            )
-            if finding.get('code_example'):
-                inline_body += f"\n\n**Suggested fix:**\n```python\n{finding.get('code_example')}\n```"
+            inline_body = f"{severity_emoji} **{finding.get('category')}** — {finding.get('description', '')[:150]}"
             github.post_review_comment(filename, line, inline_body)
 
         all_findings.extend(relevant_findings)
