@@ -281,8 +281,14 @@ def generate_pr_summary(pr_info: dict, files: List, findings: List, previous_com
                 summary += f"#### {emoji} {severity} ({len(severity_findings)})\n\n"
                 
                 for i, finding in enumerate(severity_findings[:5], 1):  # Limit to 5 per severity
-                    summary += f"{i}. **{finding.get('category', 'Issue')}** (Line {finding.get('line_start', '?')})\n"
-                    summary += f"   {finding.get('description', 'No description')[:100]}...\n\n"
+                    summary += f"{i}. **{finding.get('category', 'Issue')}** (Line {finding.get('line_start', '?')})\n\n"
+                    summary += f"   **Issue:** {finding.get('description', 'No description')}\n\n"
+                    if finding.get('why_it_matters'):
+                        summary += f"   **Why it matters:** {finding.get('why_it_matters')}\n\n"
+                    if finding.get('how_to_fix'):
+                        summary += f"   **How to fix:** {finding.get('how_to_fix')}\n\n"
+                    if finding.get('code_example'):
+                        summary += f"   **Suggested fix:**\n   ```python\n   {finding.get('code_example')}\n   ```\n\n"
                 
                 if len(severity_findings) > 5:
                     summary += f"   ... and {len(severity_findings) - 5} more\n\n"
