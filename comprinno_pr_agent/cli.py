@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Dict, List, Any
@@ -68,6 +69,44 @@ def analyze_file(file_path: str, bedrock_client: BedrockClient, report_gen: Mark
     print(f"✅ Report saved: {report_path}")
     print(f"   Found {findings_count} issue(s)")
 
+def validate_commit_messages(commits: List[Dict]) -> List[Dict]:
+    """Validate commit messages against conventional commit standards"""
+    VALID_TYPES = {'feat', 'fix', 'chore', 'docs', 'refactor', 'test', 'style', 'perf', 'ci', 'build', 'revert'}
+    VAGUE = {'update', 'fix', 'changes', 'wip', 'misc', 'stuff', 'minor', 'patch', 'temp'}
+    CONVENTIONAL = re.compile(r'^(\w+)(\(.+\))?!?:\s.+')
+
+    results = []
+    for commit in commits:
+        msg = commit['message'].strip().split('\n')[0]  # subject line only
+        issues = []
+
+        if CONVENTIONAL.match(msg):
+            commit_type = msg.split(':')[0].split('(')[0].lower()
+            if commit_type not in VALID_TYPES:
+                issues.append(f"Unknown type `{commit_type}` — use one of: {', '.join(sorted(VALID_TYPES))}")
+        else:
+            issues.append("Missing conventional commit format — use `type: description` (e.g. `fix: resolve SQL injection`)")
+
+        if len(msg) > 72:
+            issues.append(f"Subject line too long ({len(msg)} chars) — keep under 72")
+
+        first_word = msg.split(':')[-1].strip().split()[0].lower() if ':' in msg else msg.split()[0].lower()
+        if first_word.endswith('ed') or first_word.endswith('ing'):
+            issues.append(f"Use imperative mood — `{first_word}` → `{first_word.rstrip('eding')}`")
+
+        if msg.lower().strip().rstrip('.') in VAGUE:
+            issues.append("Message is too vague — be specific about what changed")
+
+        results.append({
+            'sha': commit['sha'],
+            'message': msg,
+            'author': commit['author'],
+            'status': '✅' if not issues else '❌',
+            'issues': issues
+        })
+    return results
+
+
 def analyze_pr(pr_url: str, bedrock_client: BedrockClient, report_gen: MarkdownReportGenerator,
                jira_context: dict = None, previous_comments_context: str = ""):
     """Analyze a GitHub PR with FAISS-based issue tracking"""
@@ -84,6 +123,15 @@ def analyze_pr(pr_url: str, bedrock_client: BedrockClient, report_gen: MarkdownR
     print(f"📋 PR #{pr_number}: {pr_info['title']}")
     
     context_mgr = PRContextManager(pr_number)
+
+    # Validate commit messages
+    commits = github.get_pr_commits()
+    commit_validation = validate_commit_messages(commits)
+    bad_commits = [c for c in commit_validation if c['status'] == '❌']
+    if bad_commits:
+        print(f"⚠️  {len(bad_commits)} commit(s) have message issues")
+    else:
+        print(f"✅ All commit messages follow conventions")
     
     # Extract Jira ticket from PR title
     jira_extractor = JiraTicketExtractor()
@@ -183,7 +231,7 @@ def analyze_pr(pr_url: str, bedrock_client: BedrockClient, report_gen: MarkdownR
     
     # Post consolidated comment
     print(f"\n📝 Generating report...")
-    summary = generate_pr_summary(pr_info, pr_files, all_findings, previous_comments, ticket_info=ticket_info, previous_findings=previous_findings, ticket_completion=ticket_completion, resolved_issues=all_resolved_issues)
+    summary = generate_pr_summary(pr_info, pr_files, all_findings, previous_comments, ticket_info=ticket_info, previous_findings=previous_findings, ticket_completion=ticket_completion, resolved_issues=all_resolved_issues, commit_validation=commit_validation)
     github.post_summary_comment(summary)
     
     print(f"\n✅ Analysis complete! Found {len(all_findings)} issue(s)")
@@ -234,7 +282,7 @@ def parse_previous_findings(comments: list) -> list:
     return summary
 
 
-def generate_pr_summary(pr_info: dict, files: List, findings: List, previous_comments: List = None, ticket_info: dict = None, previous_findings: list = None, ticket_completion: dict = None, resolved_issues: list = None) -> str:
+def generate_pr_summary(pr_info: dict, files: List, findings: List, previous_comments: List = None, ticket_info: dict = None, previous_findings: list = None, ticket_completion: dict = None, resolved_issues: list = None, commit_validation: list = None) -> str:
     """Generate consolidated PR summary comment with ticket details"""
     critical = sum(1 for f in findings if f.get('severity') == 'Critical')
     warning = sum(1 for f in findings if f.get('severity') == 'Warning')
@@ -272,6 +320,22 @@ def generate_pr_summary(pr_info: dict, files: List, findings: List, previous_com
     summary += f"| 🔴 Critical | {critical} |\n"
     summary += f"| 🟡 Warning | {warning} |\n"
     summary += f"| 🔵 Info | {info} |\n\n"
+
+    # Commit message validation
+    if commit_validation:
+        summary += f"### 📝 Commit Message Review\n\n"
+        summary += f"| Commit | Message | Status |\n"
+        summary += f"|--------|---------|--------|\n"
+        for c in commit_validation:
+            summary += f"| `{c['sha']}` | {c['message'][:60]} | {c['status']} |\n"
+        summary += "\n"
+        bad = [c for c in commit_validation if c['issues']]
+        if bad:
+            summary += f"**Issues:**\n"
+            for c in bad:
+                for issue in c['issues']:
+                    summary += f"- `{c['sha']}`: {issue}\n"
+            summary += "\n"
     
     if ticket_info:
         summary += f"### ✅ Ticket Validation\n\n"
