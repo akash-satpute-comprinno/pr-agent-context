@@ -372,10 +372,17 @@ def generate_pr_summary(pr_info: dict, files: List, findings: List, previous_com
                     summary += f"- {item}\n"
                 summary += "\n"
 
-    # Resolved issues from previous review
+    # Resolved issues from previous review — deduplicated by category
     if resolved_issues:
-        summary += f"### ✅ Resolved Since Last Review\n\n"
+        seen = set()
+        unique_resolved = []
         for issue in resolved_issues:
+            key = issue.get('category', '')
+            if key not in seen:
+                seen.add(key)
+                unique_resolved.append(issue)
+        summary += f"### ✅ Resolved Since Last Review\n\n"
+        for issue in unique_resolved:
             summary += f"- **{issue.get('category')}** — {issue.get('description')}\n"
         summary += "\n"
     if findings:
