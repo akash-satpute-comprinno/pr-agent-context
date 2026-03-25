@@ -169,15 +169,16 @@ Return this in the "ticket_completion" field of the JSON response.
         if previous_findings:
             items = "\n".join(f"  - [{f['category']}] Line {f['line']}: {f['description']}" for f in previous_findings)
             previous_section = f"""## PREVIOUS REVIEW CONTEXT
-The following issues were flagged in the last review of this PR:
+The following issues were flagged across all previous reviews of this PR:
 {items}
 
 Instructions:
-1. For each previously flagged issue, check if it is fixed in the current code:
-   - If FIXED: verify the fix is correct, complete and follows best practices. Add to "ticket_completion.done" with verification note. Do NOT re-raise as a finding.
-   - If INCORRECTLY FIXED: raise as a new finding explaining what's wrong with the fix.
-   - If NOT FIXED: raise again as a finding.
-2. Only raise NEW issues introduced since the last review.
+1. For EVERY issue listed above that exists in this file, check its current status:
+   - If FIXED CORRECTLY: add to "resolved_issues" with verification that the fix is correct and complete.
+   - If FIXED INCORRECTLY or REGRESSION (was fixed but broken again): raise as a new Critical finding explaining what's wrong.
+   - If NOT FIXED: raise as a finding.
+2. Also check for NEW issues not in the list above.
+3. Be thorough — re-verify every previously flagged issue in this file, not just recent ones.
 
 """
 
