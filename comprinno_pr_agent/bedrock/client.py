@@ -167,18 +167,23 @@ Return this in the "ticket_completion" field of the JSON response.
 
         previous_section = ""
         if previous_findings:
-            items = "\n".join(f"  - [{f['category']}] Line {f['line']}: {f['description']}" for f in previous_findings)
+            items = []
+            for f in previous_findings:
+                item = f"  - [{f['category']}] Line {f['line']}: {f['description']}"
+                if f.get('code_snippet'):
+                    item += f"\n    Problematic code was:\n    ```\n    {f['code_snippet'][:200]}\n    ```"
+                items.append(item)
             previous_section = f"""## PREVIOUS REVIEW CONTEXT
-The following issues were flagged across all previous reviews of this PR:
-{items}
+The following issues were flagged in previous reviews. Each includes the problematic code that existed at the time:
+{chr(10).join(items)}
 
 Instructions:
-1. For EVERY issue listed above that exists in this file, check its current status:
-   - If FIXED CORRECTLY: add to "resolved_issues" ONLY. Do NOT add to "findings".
-   - If FIXED INCORRECTLY or REGRESSION: add to "findings" as a new Critical issue explaining what's wrong.
-   - If NOT FIXED: add to "findings" as before.
-2. Also check for NEW issues not in the list above and add to "findings".
-3. NEVER add a resolved/correctly-fixed issue to "findings".
+1. For each issue above, look at the CURRENT CODE and check if the problematic code still exists:
+   - If the problematic code is GONE and replaced with a correct fix → add to "resolved_issues" with verification note.
+   - If the problematic code STILL EXISTS unchanged → add to "findings".
+   - If it was changed but the fix is WRONG → add to "findings" explaining what's wrong.
+2. Add any NEW issues found in the current code to "findings".
+3. Base your judgment on the ACTUAL CURRENT CODE — not on assumptions from history.
 
 """
 
