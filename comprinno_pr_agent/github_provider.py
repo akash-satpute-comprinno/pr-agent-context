@@ -23,6 +23,18 @@ class GitHubProvider:
             raise ValueError(f"Invalid GitHub PR URL: {pr_url}")
         return match.group(1), match.group(2), int(match.group(3))
     
+    def get_pr_commits(self) -> List[Dict[str, Any]]:
+        """Get all commits in the PR with their messages"""
+        commits = []
+        for commit in self.pr.get_commits():
+            commits.append({
+                'sha': commit.sha[:7],
+                'message': commit.commit.message,
+                'author': commit.commit.author.name,
+                'date': commit.commit.author.date.isoformat()
+            })
+        return commits
+
     def get_pr_files(self) -> List[Dict[str, Any]]:
         """Get all changed files in the PR with their diffs"""
         files = []
