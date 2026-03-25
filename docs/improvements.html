@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Comprinno PR Agent — Improvements</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f6f8fa; color: #24292f; }
+    header { background: #24292f; color: #fff; padding: 32px 48px; }
+    header h1 { font-size: 28px; font-weight: 700; }
+    header p { margin-top: 8px; color: #8b949e; font-size: 15px; }
+    .container { max-width: 960px; margin: 40px auto; padding: 0 24px; }
+    .section { background: #fff; border: 1px solid #d0d7de; border-radius: 8px; margin-bottom: 24px; overflow: hidden; }
+    .section-header { padding: 16px 24px; background: #f6f8fa; border-bottom: 1px solid #d0d7de; display: flex; align-items: center; gap: 12px; }
+    .section-header h2 { font-size: 17px; font-weight: 600; }
+    .badge { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 12px; }
+    .badge-new { background: #dafbe1; color: #1a7f37; }
+    .badge-improved { background: #ddf4ff; color: #0969da; }
+    .section-body { padding: 20px 24px; }
+    .section-body p { font-size: 14px; line-height: 1.7; color: #57606a; margin-bottom: 12px; }
+    .how-it-works { background: #f6f8fa; border-radius: 6px; padding: 16px; margin-top: 12px; }
+    .how-it-works h4 { font-size: 13px; font-weight: 600; margin-bottom: 10px; color: #24292f; }
+    .step { display: flex; gap: 12px; margin-bottom: 8px; align-items: flex-start; }
+    .step-num { background: #0969da; color: #fff; border-radius: 50%; width: 22px; height: 22px; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px; }
+    .step p { margin: 0; font-size: 13px; color: #57606a; }
+    .code-block { background: #161b22; color: #e6edf3; border-radius: 6px; padding: 14px 16px; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 12px; line-height: 1.6; margin-top: 12px; overflow-x: auto; }
+    .code-block .green { color: #3fb950; }
+    .code-block .red { color: #f85149; }
+    .code-block .yellow { color: #d29922; }
+    .code-block .blue { color: #79c0ff; }
+    .output-preview { border: 1px solid #d0d7de; border-radius: 6px; padding: 16px; margin-top: 12px; font-size: 13px; line-height: 1.7; }
+    .output-preview .done { color: #1a7f37; font-weight: 600; }
+    .output-preview .fail { color: #cf222e; font-weight: 600; }
+    .output-preview .warn { color: #9a6700; font-weight: 600; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 12px; }
+    th { background: #f6f8fa; padding: 8px 12px; text-align: left; border: 1px solid #d0d7de; font-weight: 600; }
+    td { padding: 8px 12px; border: 1px solid #d0d7de; color: #57606a; }
+    .summary-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 32px; }
+    .summary-card { background: #fff; border: 1px solid #d0d7de; border-radius: 8px; padding: 20px; text-align: center; }
+    .summary-card .num { font-size: 36px; font-weight: 700; color: #0969da; }
+    .summary-card .label { font-size: 13px; color: #57606a; margin-top: 4px; }
+    footer { text-align: center; padding: 32px; color: #8b949e; font-size: 13px; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>🤖 Comprinno PR Agent — Improvements Documentation</h1>
+  <p>What was improved, how it works, and what it produces</p>
+</header>
+
+<div class="container">
+
+  <div class="summary-grid">
+    <div class="summary-card">
+      <div class="num">5</div>
+      <div class="label">New Features Added</div>
+    </div>
+    <div class="summary-card">
+      <div class="num">3</div>
+      <div class="label">Bug Fixes</div>
+    </div>
+    <div class="summary-card">
+      <div class="num">6</div>
+      <div class="label">Files Modified</div>
+    </div>
+  </div>
+
+  <!-- Feature 1 -->
+  <div class="section">
+    <div class="section-header">
+      <span style="font-size:20px">💬</span>
+      <h2>1. Inline PR Comments on Code Lines</h2>
+      <span class="badge badge-new">NEW</span>
+    </div>
+    <div class="section-body">
+      <p>Previously the agent only posted a single summary comment. Now it posts inline review comments directly on the exact lines of code where issues are found — just like a human code reviewer would.</p>
+      <div class="how-it-works">
+        <h4>How it works</h4>
+        <div class="step"><div class="step-num">1</div><p>Bedrock returns findings with <code>line_start</code> for each issue</p></div>
+        <div class="step"><div class="step-num">2</div><p>Agent calls <code>GitHubProvider.post_review_comment(filename, line, body)</code> for each finding</p></div>
+        <div class="step"><div class="step-num">3</div><p>Each inline comment includes: severity, description, why it matters, how to fix, and a code example</p></div>
+      </div>
+      <div class="output-preview">
+        <strong>🔴 SQL Injection Risk (Critical)</strong><br/>
+        The <code>delete_user</code> function uses string concatenation...<br/><br/>
+        <strong>Why it matters:</strong> Attackers can manipulate queries to access any data...<br/><br/>
+        <strong>Suggested fix:</strong><br/>
+        <code>cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))</code>
+      </div>
+    </div>
+  </div>
+
+  <!-- Feature 2 -->
+  <div class="section">
+    <div class="section-header">
+      <span style="font-size:20px">🔧</span>
+      <h2>2. Full Fix Suggestions with Code Examples</h2>
+      <span class="badge badge-improved">IMPROVED</span>
+    </div>
+    <div class="section-body">
+      <p>Previously the summary comment only showed a short description of each issue. Now it includes the full explanation, why it matters, step-by-step fix instructions, and a working code example for every finding.</p>
+      <div class="how-it-works">
+        <h4>How it works</h4>
+        <div class="step"><div class="step-num">1</div><p>Bedrock already returned <code>how_to_fix</code> and <code>code_example</code> fields — they were being dropped</p></div>
+        <div class="step"><div class="step-num">2</div><p>Updated <code>generate_pr_summary()</code> to include all fields in the output</p></div>
+      </div>
+      <div class="code-block">
+<span class="green">✅ Before:</span>
+1. SQL Injection Risk (Line 24)
+   The delete_user function uses string concatenation...
+
+<span class="green">✅ After:</span>
+1. SQL Injection Risk (Line 24)
+
+   <span class="blue">Issue:</span> The delete_user function uses string concatenation...
+   <span class="blue">Why it matters:</span> Attackers can access/delete any data...
+   <span class="blue">How to fix:</span> Use parameterized queries...
+   <span class="blue">Suggested fix:</span>
+   cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
+      </div>
+    </div>
+  </div>
+
+  <!-- Feature 3 -->
+  <div class="section">
+    <div class="section-header">
+      <span style="font-size:20px">📋</span>
+      <h2>3. Jira Ticket Completion Status</h2>
+      <span class="badge badge-new">NEW</span>
+    </div>
+    <div class="section-body">
+      <p>The agent now evaluates the full Jira ticket (title, description, acceptance criteria) against the code and reports what has been done, what is partially done, and what is still missing — with verification that completed items are correctly implemented.</p>
+      <div class="how-it-works">
+        <h4>How it works</h4>
+        <div class="step"><div class="step-num">1</div><p>Jira ticket details are injected into the Bedrock prompt</p></div>
+        <div class="step"><div class="step-num">2</div><p>Bedrock returns a <code>ticket_completion</code> JSON object with <code>done</code>, <code>partial</code>, <code>not_done</code> lists</p></div>
+        <div class="step"><div class="step-num">3</div><p>For "done" items, Bedrock verifies the implementation is correct — if flawed, moves to "partial"</p></div>
+        <div class="step"><div class="step-num">4</div><p>Results displayed in the PR comment under "Jira Ticket Completion"</p></div>
+      </div>
+      <div class="output-preview">
+        <strong>📋 Jira Ticket Completion — AAS-30</strong><br/>
+        <strong>Ticket:</strong> Fix SQL injection in auth service<br/><br/>
+        <span class="done">✅ Done:</span><br/>
+        - Secret key loaded from env var — verified correct ✓<br/>
+        - Token expiry added — correctly uses timedelta(hours=1) ✓<br/><br/>
+        <span class="warn">⚠️ Partially Done:</span><br/>
+        - get_user_data fixed but introduced resource leak<br/><br/>
+        <span class="fail">❌ Not Yet Done:</span><br/>
+        - SQL injection in delete_user still present<br/>
+        - Exception handling in verify_token missing
+      </div>
+    </div>
+  </div>
+
+  <!-- Feature 4 -->
+  <div class="section">
+    <div class="section-header">
+      <span style="font-size:20px">🔁</span>
+      <h2>4. Resolved Issues Tracking & Verification</h2>
+      <span class="badge badge-new">NEW</span>
+    </div>
+    <div class="section-body">
+      <p>On re-analysis, the agent now explicitly tracks which previously flagged issues have been resolved, verifies the fix is correct, and only reports new or remaining issues. If a fix is incorrect, it raises a new finding explaining what's wrong.</p>
+      <div class="how-it-works">
+        <h4>How it works</h4>
+        <div class="step"><div class="step-num">1</div><p>Previous agent comments are fetched from GitHub and passed to Bedrock</p></div>
+        <div class="step"><div class="step-num">2</div><p>Bedrock checks each previously flagged issue against the new code</p></div>
+        <div class="step"><div class="step-num">3</div><p>Returns <code>resolved_issues</code> list with verification notes</p></div>
+        <div class="step"><div class="step-num">4</div><p>If fix is incorrect → raised as a new finding with explanation</p></div>
+      </div>
+      <div class="output-preview">
+        <strong>✅ Resolved Since Last Review</strong><br/><br/>
+        <span class="done">- SQL Injection Risk</span> — get_user_data now uses parameterized queries ✓<br/>
+        <span class="done">- Missing Exception Handling</span> — verify_token now has try/except ✓<br/><br/>
+        <strong>🔴 New Issues (2)</strong><br/>
+        <span class="fail">- Resource Leak</span> — DB connection not closed in get_user_data<br/>
+        <span class="fail">- SQL Injection</span> — new delete_user function introduced same bug
+      </div>
+    </div>
+  </div>
+
+  <!-- Feature 5 -->
+  <div class="section">
+    <div class="section-header">
+      <span style="font-size:20px">📝</span>
+      <h2>5. Commit Message Validation</h2>
+      <span class="badge badge-new">NEW</span>
+    </div>
+    <div class="section-body">
+      <p>The agent now fetches all commits in the PR and validates each message against conventional commit standards — checking format, length, imperative mood, and vague messages.</p>
+      <div class="how-it-works">
+        <h4>How it works</h4>
+        <div class="step"><div class="step-num">1</div><p><code>GitHubProvider.get_pr_commits()</code> fetches all commits in the PR</p></div>
+        <div class="step"><div class="step-num">2</div><p><code>validate_commit_messages()</code> checks each message against rules</p></div>
+        <div class="step"><div class="step-num">3</div><p>Results shown as a table in the PR summary comment</p></div>
+      </div>
+      <table>
+        <tr><th>Rule</th><th>Valid Example</th><th>Invalid Example</th></tr>
+        <tr><td>Conventional format</td><td><code>fix: resolve SQL injection</code></td><td><code>fixed the bug</code></td></tr>
+        <tr><td>Valid type prefix</td><td><code>feat:</code>, <code>fix:</code>, <code>chore:</code></td><td><code>update:</code>, <code>change:</code></td></tr>
+        <tr><td>Subject length</td><td>Under 72 characters</td><td>Over 72 characters</td></tr>
+        <tr><td>Imperative mood</td><td><code>fix: add validation</code></td><td><code>fix: added validation</code></td></tr>
+        <tr><td>Not vague</td><td><code>fix: resolve null pointer in login</code></td><td><code>update</code>, <code>wip</code>, <code>misc</code></td></tr>
+      </table>
+      <div class="output-preview" style="margin-top:12px">
+        <strong>📝 Commit Message Review</strong><br/><br/>
+        <table>
+          <tr><th>Commit</th><th>Message</th><th>Status</th></tr>
+          <tr><td><code>2ad931b</code></td><td>AAS-30 Add JWT service</td><td><span class="fail">❌</span></td></tr>
+          <tr><td><code>098b4d5</code></td><td>AAS-30 Fix: add token expiry...</td><td><span class="fail">❌</span></td></tr>
+        </table>
+        <br/>
+        <strong>Issues:</strong><br/>
+        - <code>2ad931b</code>: Missing conventional format — use <code>feat: description</code><br/>
+        - <code>098b4d5</code>: Missing conventional format — use <code>fix: description</code>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bug Fixes -->
+  <div class="section">
+    <div class="section-header">
+      <span style="font-size:20px">🐛</span>
+      <h2>Bug Fixes</h2>
+    </div>
+    <div class="section-body">
+      <table>
+        <tr><th>File</th><th>Bug</th><th>Fix</th></tr>
+        <tr>
+          <td><code>bedrock/client.py</code></td>
+          <td>AWS credentials hardcoded — expired tokens caused all analyses to fail</td>
+          <td>Credentials now read from environment variables</td>
+        </tr>
+        <tr>
+          <td><code>bedrock/client.py</code></td>
+          <td><code>aws_session_token</code> always passed to boto3 even when expired/None</td>
+          <td>Session token only passed if it exists in environment</td>
+        </tr>
+        <tr>
+          <td><code>cli.py</code></td>
+          <td><code>context_mgr</code> used but never initialized in <code>analyze_pr()</code></td>
+          <td>Added <code>context_mgr = PRContextManager(pr_number)</code></td>
+        </tr>
+        <tr>
+          <td><code>cli.py</code></td>
+          <td>Findings filtered out for new files — line numbers didn't match diff</td>
+          <td>New files skip line filter and report all findings</td>
+        </tr>
+        <tr>
+          <td><code>.github/workflows/code-analysis.yml</code></td>
+          <td><code>AWS_SESSION_TOKEN</code> not passed to workflow environment</td>
+          <td>Added <code>AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}</code></td>
+        </tr>
+      </table>
+    </div>
+  </div>
+
+  <!-- Files Modified -->
+  <div class="section">
+    <div class="section-header">
+      <span style="font-size:20px">📁</span>
+      <h2>Files Modified</h2>
+    </div>
+    <div class="section-body">
+      <table>
+        <tr><th>File</th><th>Changes</th></tr>
+        <tr><td><code>comprinno_pr_agent/bedrock/client.py</code></td><td>Credentials from env vars, session token fix, Jira completion prompt, resolved issues schema</td></tr>
+        <tr><td><code>comprinno_pr_agent/cli.py</code></td><td>Inline comments, fix suggestions, ticket completion, resolved issues, commit validation</td></tr>
+        <tr><td><code>comprinno_pr_agent/github_provider.py</code></td><td>Added <code>get_pr_commits()</code> method</td></tr>
+        <tr><td><code>comprinno_pr_agent/github_action_runner.py</code></td><td>Fixed previous comments context to skip empty reports</td></tr>
+        <tr><td><code>.github/workflows/code-analysis.yml</code></td><td>Added <code>AWS_SESSION_TOKEN</code> to workflow env</td></tr>
+        <tr><td><code>FEATURES.md</code></td><td>Full feature documentation</td></tr>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<footer>
+  Comprinno PR Agent · Powered by AWS Bedrock Nova · Built by Comprinno Tech
+</footer>
+
+</body>
+</html>
