@@ -11,16 +11,17 @@ class BedrockClient:
     def __init__(self):
         # Use provided AWS credentials for Bedrock
         self.region = os.getenv('AWS_REGION', 'ap-south-1')
-        self.model_id = os.getenv('BEDROCK_MODEL', 'apac.amazon.nova-pro-v1:0')
+        self.model_id = os.getenv('BEDROCK_MODEL', 'amazon.nova-pro-v1:0')
         self.temperature = 0.3
         self.max_tokens = 4096
         
+        session_token = os.getenv('AWS_SESSION_TOKEN')
         self.client = boto3.client(
             service_name='bedrock-runtime',
             region_name=self.region,
             aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
             aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
-            **(({'aws_session_token': os.getenv('AWS_SESSION_TOKEN')} if os.getenv('AWS_SESSION_TOKEN') else {}))
+            **({"aws_session_token": session_token} if session_token else {})
         )
         
         # Context manager will be initialized per PR in analyze_pr
@@ -152,8 +153,12 @@ Description: {str(ticket_info.get('description', ''))[:500]}
 Acceptance Criteria:
 {ac}
 
-Validate the code against the above ticket requirements in addition to general code quality checks.
-Flag any acceptance criteria that are missing or incorrectly implemented.
+Based on the full ticket (title, description, acceptance criteria), analyze the code and determine:
+1. What requirements from the ticket are DONE in this code
+2. What requirements are NOT YET implemented
+3. What requirements are PARTIALLY implemented
+
+Return this in the "ticket_completion" field of the JSON response.
 
 """
 
@@ -296,10 +301,16 @@ Return your analysis as JSON:
       "best_practice": "Related best practice, design principle, or architectural guideline",
       "code_snippet": "The problematic code"
     }}
-  ]
+  ],
+  "ticket_completion": {{
+    "done": ["list of ticket requirements that are fully implemented in this code"],
+    "not_done": ["list of ticket requirements that are missing or not yet implemented"],
+    "partial": ["list of ticket requirements that are partially implemented"]
+  }}
 }}
 
 IMPORTANT: Be thorough and check ALL categories. Focus on production-readiness, not just code style.
+If no Jira ticket context is provided, return an empty ticket_completion object.
 
 Only return valid JSON, no other text."""
     
