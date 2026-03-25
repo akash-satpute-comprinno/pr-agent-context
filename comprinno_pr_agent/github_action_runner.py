@@ -22,17 +22,25 @@ from cli import analyze_pr, load_env
 
 
 def get_previous_comments_context(github: GitHubProvider) -> str:
-    """Extract previous agent comments as context string for Bedrock"""
+    """Extract all previous agent comments as context string for Bedrock"""
     previous_comments = github.get_previous_agent_comments()
     if not previous_comments:
         return ""
 
-    context = "PREVIOUS REVIEW CONTEXT (do not repeat resolved issues):\n"
-    # Use only the most recent comment to avoid token bloat
-    latest = previous_comments[0]
-    body = latest['body'][:2000]  # cap at 2000 chars
-    context += f"{body}\n"
-    return context
+    context = "PREVIOUS REVIEW CONTEXT (all past reviews — do not repeat resolved issues):\n\n"
+    total_chars = 0
+    for i, comment in enumerate(previous_comments):
+        body = comment['body']
+        # Skip empty reports
+        if 'No Issues Found' in body or 'Total Issues | 0' in body:
+            continue
+        chunk = f"--- Review {i+1} ---\n{body[:1000]}\n\n"
+        if total_chars + len(chunk) > 3000:  # cap total context at 3000 chars
+            break
+        context += chunk
+        total_chars += len(chunk)
+
+    return context if total_chars > 0 else ""
 
 def main():
     """Run analysis in GitHub Actions environment"""
