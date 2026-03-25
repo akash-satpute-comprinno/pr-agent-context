@@ -173,9 +173,11 @@ The following issues were flagged in the last review of this PR:
 {items}
 
 Instructions:
-1. If any of the above issues are now fixed in the current code, explicitly acknowledge them as RESOLVED — do not re-raise them.
-2. Do NOT re-report issues that are unchanged and already flagged above.
-3. Only raise NEW issues introduced since the last review.
+1. For each previously flagged issue, check if it is fixed in the current code:
+   - If FIXED: verify the fix is correct, complete and follows best practices. Add to "ticket_completion.done" with verification note. Do NOT re-raise as a finding.
+   - If INCORRECTLY FIXED: raise as a new finding explaining what's wrong with the fix.
+   - If NOT FIXED: raise again as a finding.
+2. Only raise NEW issues introduced since the last review.
 
 """
 
@@ -309,7 +311,13 @@ Return your analysis as JSON:
     "done": ["requirement — verified correct: explanation of how it's implemented and why it's correct"],
     "not_done": ["requirement — what needs to be implemented"],
     "partial": ["requirement — what was done vs what's still missing"]
-  }}
+  }},
+  "resolved_issues": [
+    {{
+      "category": "previously flagged issue category",
+      "description": "what was fixed and verification that the fix is correct"
+    }}
+  ]
 }}
 
 IMPORTANT: Be thorough and check ALL categories. Focus on production-readiness, not just code style.
