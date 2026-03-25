@@ -249,23 +249,30 @@ def parse_previous_findings(comments: list) -> list:
 
     for comment in comments:
         body = comment['body']
-        # Match findings with description and optional code snippet
+
+        # Pattern: matches findings in current format with **Issue:** field
         for match in re.finditer(
-            r'\d+\.\s+\*\*(.+?)\*\*\s+\(Line\s+(\w+)\)\s*\n\s+\*\*Issue:\*\*\s+(.+?)(?:\n\s+\*\*.*?\*\*.*?)*?(?:\*\*Suggested fix:\*\*\s*```\w*\n(.*?)```)?',
+            r'\d+\.\s+\*\*(.+?)\*\*\s+\(Line\s+(\w+)\)\s*\n+\s*\*\*Issue:\*\*\s+(.+?)(?=\n\s*\*\*|\Z)',
             body, re.DOTALL
         ):
             category = match.group(1).strip()
             if category in seen:
                 continue
             seen.add(category)
+
+            # Extract code snippet from ```python block after this finding
+            desc_end = match.end()
+            snippet_match = re.search(r'```python\n(.*?)```', body[desc_end:desc_end+800], re.DOTALL)
+            snippet = snippet_match.group(1).strip() if snippet_match else ''
+
             findings.append({
                 'category': category,
                 'line': match.group(2).strip(),
                 'description': match.group(3).strip()[:200],
-                'code_snippet': match.group(4).strip() if match.group(4) else ''
+                'code_snippet': snippet[:300]
             })
 
-    # Fallback: simpler pattern for older comment format
+    # Fallback: simpler pattern for older format
     if not findings:
         for comment in comments:
             body = comment['body']
