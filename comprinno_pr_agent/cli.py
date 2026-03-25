@@ -247,7 +247,7 @@ def parse_previous_findings(comments: list) -> list:
     seen = set()
     findings = []
 
-    for comment in comments:
+    for comment in comments[:3]:  # last 3 comments only to reduce noise
         body = comment['body']
 
         # Pattern: matches findings in current format with **Issue:** field
