@@ -79,8 +79,16 @@ class PRContextManager:
         self._upload_to_s3()
 
     def store_findings(self, findings: List[Dict]):
-        """Store findings in FAISS with pr_number tag"""
+        """Store findings in FAISS — skip duplicates by category+line+file"""
+        existing_keys = {
+            f"{m['category']}:{m['line']}:{m['file']}"
+            for m in self.metadata if m['status'] == 'open'
+        }
         for finding in findings:
+            key = f"{finding.get('category','')}:{finding.get('line_start',0)}:{finding.get('file','')}"
+            if key in existing_keys:
+                continue
+            existing_keys.add(key)
             text = f"{finding.get('category', '')} {finding.get('description', '')} {finding.get('code_snippet', '')}"
             embedding = self.encoder.encode([text])[0]
             self.index.add(np.array([embedding], dtype=np.float32))
