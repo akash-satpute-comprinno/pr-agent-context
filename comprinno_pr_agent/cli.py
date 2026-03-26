@@ -315,6 +315,7 @@ def parse_previous_findings(comments: list) -> list:
             snippet = snippet_match.group(1).strip() if snippet_match else ''
 
             findings.append({
+                'id': len(findings),
                 'category': category,
                 'line': match.group(2).strip(),
                 'description': match.group(3).strip()[:200],
@@ -330,6 +331,7 @@ def parse_previous_findings(comments: list) -> list:
                 if category not in seen:
                     seen.add(category)
                     findings.append({
+                        'id': len(findings),
                         'category': category,
                         'line': match.group(2).strip(),
                         'description': match.group(3).strip().rstrip('.'),
