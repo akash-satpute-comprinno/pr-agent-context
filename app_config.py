@@ -2,14 +2,20 @@
 import os
 from datetime import timedelta
 
-# BUG: Weak fallback secrets - will be used if env vars not set
-SECRET_KEY = os.getenv("SECRET_KEY", "medai_secret_key_2024")
-JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "medai_jwt_secret_2024")
+# FIXED: Raise error if secrets not set in environment
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    raise ValueError("SECRET_KEY environment variable is required")
 
-# BUG: JWT tokens never expire
-JWT_ACCESS_TOKEN_EXPIRES = False
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
+if not JWT_SECRET_KEY:
+    raise ValueError("JWT_SECRET_KEY environment variable is required")
 
-Hi hello  # BUG: stray text - will cause runtime error
+# FIXED: JWT tokens expire after 24 hours
+JWT_ACCESS_TOKEN_EXPIRES = timedelta(hours=24)
+
+# BUG: stray text still present
+Hi hello
 
 def get_app_config():
     return {
