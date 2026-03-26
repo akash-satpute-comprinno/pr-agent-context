@@ -155,42 +155,72 @@ def analyze_pr(pr_url: str, bedrock_client: BedrockClient, report_gen: MarkdownR
     # Full analysis
     pr_files = github.get_pr_files()
     print(f"\n📁 Found {len(pr_files)} changed file(s)")
-    
+
     all_findings = []
     ticket_completion = {"done": [], "not_done": [], "partial": []}
     all_resolved_issues = []
-    
+    verified_previous = []  # results of per-issue AI verification
+
+    # Get all current file contents for verification
+    file_contents = {}
+    for file_info in pr_files:
+        filename = file_info['filename']
+        if detect_language(filename) != 'unknown':
+            code = github.get_file_content(filename)
+            if code:
+                file_contents[filename] = code
+
+    # Step 1 — Verify each previous finding with focused AI call
+    if previous_findings:
+        print(f"\n🔎 Verifying {len(previous_findings)} previous issue(s)...")
+        all_current_code = "\n\n".join(
+            f"# {fname}\n{code}" for fname, code in file_contents.items()
+        )
+        for old_finding in previous_findings:
+            print(f"   Checking: [{old_finding['category']}] Line {old_finding['line']}...")
+            result = bedrock_client.verify_issue_resolution(old_finding, all_current_code, "PR files")
+            status = result.get('status', 'unknown')
+            reason = result.get('reason', '')
+            verified_previous.append({
+                'category': old_finding['category'],
+                'line': old_finding['line'],
+                'description': old_finding['description'],
+                'status': status,
+                'reason': reason
+            })
+            print(f"   → {status}: {reason[:60]}")
+
+    # Step 2 — Find NEW issues per file (excluding known ones)
+    known_issues = previous_findings or []
     for file_info in pr_files:
         filename = file_info['filename']
         language = detect_language(filename)
-        
         if language == 'unknown':
             continue
-        
-        print(f"📄 Analyzing: {filename}")
-        
-        code = github.get_file_content(filename)
+
+        code = file_contents.get(filename)
         if not code:
             continue
-        
+
         changed_lines = github.parse_diff_lines(file_info['patch'])
         if not changed_lines:
             continue
-        
-        print(f"🔍 Running AI analysis...")
-        results = bedrock_client.analyze_code(code, language, filename, ticket_info=jira_context or ticket_info, previous_findings=previous_findings, previous_comments_context=previous_comments_context)
-        
+
+        print(f"📄 Finding new issues: {filename}")
+        results = bedrock_client.find_new_issues(
+            code, language, filename,
+            known_issues=known_issues,
+            ticket_info=jira_context or ticket_info
+        )
+
         if 'error' in results:
             continue
 
-        # Collect ticket completion from each file analysis (merge lists)
+        # Collect ticket completion
         tc = results.get('ticket_completion', {})
         for key in ['done', 'not_done', 'partial']:
             ticket_completion[key].extend(tc.get(key, []))
 
-        # Collect resolved issues
-        all_resolved_issues.extend(results.get('resolved_issues', []))
-        
         findings = results.get('findings', [])
         changed_line_numbers = {cl['line_number'] for cl in changed_lines}
         is_new_file = file_info.get('status') == 'added' or len(changed_line_numbers) == len(code.splitlines())
@@ -198,12 +228,11 @@ def analyze_pr(pr_url: str, bedrock_client: BedrockClient, report_gen: MarkdownR
             f for f in findings
             if any(f.get('line_start', 0) <= ln <= f.get('line_end', 0) for ln in changed_line_numbers)
         ]
-        
-        # Add file info to findings
+
         for f in relevant_findings:
             f['file'] = filename
 
-        # Post inline comments on the PR diff
+        # Post inline comments
         for finding in relevant_findings:
             line = finding.get('line_start')
             if not line:
@@ -211,7 +240,14 @@ def analyze_pr(pr_url: str, bedrock_client: BedrockClient, report_gen: MarkdownR
             if line not in changed_line_numbers and not is_new_file:
                 continue
             severity_emoji = {'Critical': '🔴', 'Warning': '🟡', 'Info': '🔵'}.get(finding.get('severity'), '⚪')
-            inline_body = f"{severity_emoji} **{finding.get('category')}** — {finding.get('description', '')[:150]}"
+            inline_body = (
+                f"{severity_emoji} **{finding.get('category')}** ({finding.get('severity')}) — 🆕 NEW\n\n"
+                f"{finding.get('description', '')}\n\n"
+                f"**Why it matters:** {finding.get('why_it_matters', '')}\n\n"
+                f"**How to fix:** {finding.get('how_to_fix', '')}"
+            )
+            if finding.get('code_example'):
+                inline_body += f"\n\n**Suggested fix:**\n```python\n{finding.get('code_example')}\n```"
             github.post_review_comment(filename, line, inline_body)
 
         all_findings.extend(relevant_findings)
@@ -223,7 +259,7 @@ def analyze_pr(pr_url: str, bedrock_client: BedrockClient, report_gen: MarkdownR
     
     # Post consolidated comment
     print(f"\n📝 Generating report...")
-    summary = generate_pr_summary(pr_info, pr_files, all_findings, previous_comments, ticket_info=ticket_info, previous_findings=previous_findings, ticket_completion=ticket_completion, resolved_issues=all_resolved_issues, commit_validation=commit_validation)
+    summary = generate_pr_summary(pr_info, pr_files, all_findings, previous_comments, ticket_info=ticket_info, previous_findings=previous_findings, ticket_completion=ticket_completion, resolved_issues=all_resolved_issues, commit_validation=commit_validation, verified_previous=verified_previous)
     github.post_summary_comment(summary)
     
     print(f"\n✅ Analysis complete! Found {len(all_findings)} issue(s)")
@@ -306,23 +342,25 @@ def parse_previous_findings(comments: list) -> list:
     return summary
 
 
-def generate_pr_summary(pr_info: dict, files: List, findings: List, previous_comments: List = None, ticket_info: dict = None, previous_findings: list = None, ticket_completion: dict = None, resolved_issues: list = None, commit_validation: list = None) -> str:
+def generate_pr_summary(pr_info: dict, files: List, findings: List, previous_comments: List = None, ticket_info: dict = None, previous_findings: list = None, ticket_completion: dict = None, resolved_issues: list = None, commit_validation: list = None, verified_previous: list = None) -> str:
     """Generate consolidated PR summary comment with ticket details"""
     critical = sum(1 for f in findings if f.get('severity') == 'Critical')
     warning = sum(1 for f in findings if f.get('severity') == 'Warning')
     info = sum(1 for f in findings if f.get('severity') == 'Info')
-    
+
     summary = f"## 🤖 Deep Code Analysis Report\n\n"
     summary += f"**PR:** #{pr_info['number']} - {pr_info['title']}\n\n"
-    
-    # Show previous context summary
-    if previous_findings:
-        summary += f"### 🔁 Previous Review Context\n\n"
-        summary += f"The following issues were flagged in the last review. The model has been instructed to acknowledge resolved ones and skip unchanged ones:\n\n"
-        for f in previous_findings:
-            summary += f"- **{f['category']}** (Line {f['line']}): {f['description'][:80]}\n"
+
+    # Verified previous issues table
+    if verified_previous:
+        summary += f"### 🔁 Previous Issues — AI Verification\n\n"
+        summary += f"| Issue | Status | Verdict |\n"
+        summary += f"|-------|--------|---------|\n"
+        for v in verified_previous:
+            status_emoji = {'resolved': '✅ Resolved', 'still_present': '❌ Still Present', 'partial': '⚠️ Partial'}.get(v['status'], '❓ Unknown')
+            summary += f"| **{v['category']}** (Line {v['line']}) | {status_emoji} | {v['reason'][:80]} |\n"
         summary += "\n"
-    
+
     # Add Ticket Details
     if ticket_info:
         summary += f"---\n\n"
