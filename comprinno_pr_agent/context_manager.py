@@ -1,27 +1,69 @@
 import faiss
 import numpy as np
 import json
+import os
+import boto3
 from datetime import datetime
 from typing import List, Dict, Optional, Tuple
 from sentence_transformers import SentenceTransformer
 from pathlib import Path
+
+
+S3_BUCKET = os.getenv('FAISS_S3_BUCKET')  # e.g. "comprinno-pr-agent-context"
+S3_PREFIX = os.getenv('FAISS_S3_PREFIX', 'faiss')
+
 
 class PRContextManager:
     def __init__(self, pr_number: int, index_path: str = ".pr_context"):
         self.pr_number = pr_number
         self.index_path = Path(index_path) / f"pr_{pr_number}"
         self.index_path.mkdir(parents=True, exist_ok=True)
-        
+
         # Initialize embedding model (local)
         self.encoder = SentenceTransformer('all-MiniLM-L6-v2')
         self.embedding_dim = 384
-        
+
         # FAISS index files (per PR)
         self.index_file = self.index_path / "findings.index"
         self.metadata_file = self.index_path / "findings.json"
-        
+
+        # Download from S3 if available
+        self._download_from_s3()
+
         self.index = self._load_or_create_index()
         self.metadata = self._load_metadata()
+
+    def _s3_key(self, filename: str) -> str:
+        return f"{S3_PREFIX}/pr_{self.pr_number}/{filename}"
+
+    def _download_from_s3(self):
+        if not S3_BUCKET:
+            return
+        try:
+            s3 = boto3.client('s3')
+            for filename in ['findings.index', 'findings.json']:
+                local_path = self.index_path / filename
+                s3_key = self._s3_key(filename)
+                try:
+                    s3.download_file(S3_BUCKET, s3_key, str(local_path))
+                    print(f"📥 Downloaded FAISS {filename} from S3")
+                except s3.exceptions.ClientError:
+                    pass  # file doesn't exist yet, will be created fresh
+        except Exception as e:
+            print(f"⚠️  S3 download warning: {e}")
+
+    def _upload_to_s3(self):
+        if not S3_BUCKET:
+            return
+        try:
+            s3 = boto3.client('s3')
+            for filename in ['findings.index', 'findings.json']:
+                local_path = self.index_path / filename
+                if local_path.exists():
+                    s3.upload_file(str(local_path), S3_BUCKET, self._s3_key(filename))
+            print(f"📤 Uploaded FAISS index to S3 (pr_{self.pr_number})")
+        except Exception as e:
+            print(f"⚠️  S3 upload warning: {e}")
     
     def _load_or_create_index(self):
         if self.index_file.exists():
@@ -38,6 +80,7 @@ class PRContextManager:
         faiss.write_index(self.index, str(self.index_file))
         with open(self.metadata_file, 'w') as f:
             json.dump(self.metadata, f, indent=2)
+        self._upload_to_s3()
     
     def store_findings(self, findings: List[Dict]):
         """Store code analysis findings in FAISS"""
