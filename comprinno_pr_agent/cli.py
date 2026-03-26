@@ -291,45 +291,55 @@ def analyze_pr(pr_url: str, bedrock_client: BedrockClient, report_gen: MarkdownR
 
 
 def parse_previous_findings(comments: list) -> list:
-    """Extract previously flagged issues from the most recent agent comment only"""
+    """Extract open issues from ALL agent comments — skip anything resolved in a later comment"""
     if not comments:
         return []
 
     import re
+
+    # First pass — collect all resolved category:line keys from ALL comments
+    resolved_keys = set()
+    for comment in comments:
+        body = comment['body']
+        # Find resolved items in verification section
+        for match in re.finditer(r'\*\*(.+?)\*\*\s+\(Line\s+(\w+)\)[^—]*—\s*✅\s*Resolved', body):
+            resolved_keys.add(f"{match.group(1).strip()}:{match.group(2).strip()}")
+
+    # Second pass — collect findings from Issues Found sections, skip resolved ones
     seen = set()
     findings = []
 
-    # Only use the most recent comment to avoid growing duplicates
-    body = comments[0]['body']
-
-    # Only look inside the "Issues Found" section
-    issues_idx = body.find('### Issues Found')
-    if issues_idx == -1:
-        return []
-    body = body[issues_idx:]
-
-    for match in re.finditer(
-        r'\d+\.\s+\*\*(.+?)\*\*\s+\(Line\s+(\w+)\)\s*\n+\s*\*\*Issue:\*\*\s+(.+?)(?=\n\s*\*\*|\Z)',
-        body, re.DOTALL
-    ):
-        category = match.group(1).strip()
-        line = match.group(2).strip()
-        key = f"{category}:{line}"
-        if key in seen:
+    for comment in comments:
+        body = comment['body']
+        issues_idx = body.find('### Issues Found')
+        if issues_idx == -1:
             continue
-        seen.add(key)
+        section = body[issues_idx:]
 
-        desc_end = match.end()
-        snippet_match = re.search(r'\*\*Problematic code:\*\*\s*```\w*\n\s*(.*?)```', body[desc_end:desc_end+1000], re.DOTALL)
-        snippet = snippet_match.group(1).strip() if snippet_match else ''
+        for match in re.finditer(
+            r'\d+\.\s+\*\*(.+?)\*\*\s+\(Line\s+(\w+)\)\s*\n+\s*\*\*Issue:\*\*\s+(.+?)(?=\n\s*\*\*|\Z)',
+            section, re.DOTALL
+        ):
+            category = match.group(1).strip()
+            line = match.group(2).strip()
+            key = f"{category}:{line}"
 
-        findings.append({
-            'id': len(findings),
-            'category': category,
-            'line': line,
-            'description': match.group(3).strip()[:200],
-            'code_snippet': snippet[:300]
-        })
+            # Skip if already seen or resolved in a later comment
+            if key in seen or key in resolved_keys:
+                continue
+            seen.add(key)
+
+            desc_end = match.end()
+            snippet_match = re.search(r'\*\*Problematic code:\*\*\s*```\w*\n\s*(.*?)```', section[desc_end:desc_end+1000], re.DOTALL)
+            snippet = snippet_match.group(1).strip() if snippet_match else ''
+
+            findings.append({
+                'id': len(findings),
+                'category': category,
+                'line': line,
+                'description': match.group(3).strip()[:200],
+                'code_snippet': snippet[:300]
+            })
 
     return findings
 
