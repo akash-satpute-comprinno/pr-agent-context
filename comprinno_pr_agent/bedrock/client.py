@@ -109,6 +109,102 @@ Based on the above context:
 """
         return base_prompt
     
+    def verify_issue_resolution(self, old_finding: dict, current_code: str, file_path: str) -> Dict[str, Any]:
+        """Ask AI to verify if a specific previously flagged issue is resolved in current code"""
+        prompt = f"""You are a code reviewer verifying if a previously flagged issue has been resolved.
+
+## Previously Flagged Issue
+- Category: {old_finding.get('category')}
+- Severity: {old_finding.get('severity')}
+- File: {file_path}
+- Line: {old_finding.get('line')}
+- Description: {old_finding.get('description')}
+- Problematic code: {old_finding.get('code_snippet', 'N/A')}
+
+## Current Code
+```
+{current_code}
+```
+
+Analyze whether this specific issue is resolved, still present, or partially fixed.
+
+Return ONLY valid JSON:
+{{
+  "status": "resolved|still_present|partial",
+  "reason": "specific explanation referencing actual code"
+}}"""
+
+        try:
+            response = self.client.converse(
+                modelId=self.model_id,
+                messages=[{"role": "user", "content": [{"text": prompt}]}],
+                inferenceConfig={"temperature": 0.1, "maxTokens": 300}
+            )
+            result = response['output']['message']['content'][0]['text']
+            return self._parse_response(result)
+        except Exception as e:
+            return {"status": "unknown", "reason": str(e)}
+
+    def find_new_issues(self, code: str, language: str, file_path: str,
+                        known_issues: list, ticket_info: dict = None) -> Dict[str, Any]:
+        """Ask AI to find only NEW issues not already tracked"""
+        known_summary = "\n".join(
+            f"- [{f.get('category')}] Line {f.get('line')}: {f.get('description', '')[:80]}"
+            for f in known_issues
+        ) or "None"
+
+        ticket_section = ""
+        if ticket_info:
+            ticket_section = f"""## Jira Ticket Context
+Ticket: {ticket_info.get('ticket_id')} - {ticket_info.get('title')}
+Description: {str(ticket_info.get('description', ''))[:300]}
+
+"""
+
+        prompt = f"""You are a code reviewer. Find ONLY NEW issues in this code that are NOT already in the known issues list below.
+
+## Already Known Issues (DO NOT re-report these)
+{known_summary}
+
+{ticket_section}## Code to Review ({language}) — {file_path}
+```{language}
+{code}
+```
+
+Return ONLY valid JSON with new issues not in the known list:
+{{
+  "findings": [
+    {{
+      "category": "string",
+      "severity": "Critical|Warning|Info",
+      "line_start": <number>,
+      "line_end": <number>,
+      "description": "string",
+      "why_it_matters": "string",
+      "how_to_fix": "string",
+      "code_example": "string",
+      "code_snippet": "string"
+    }}
+  ],
+  "ticket_completion": {{
+    "done": ["requirement — verified correct"],
+    "not_done": ["requirement — missing"],
+    "partial": ["requirement — partially done"]
+  }}
+}}"""
+
+        try:
+            response = self.client.converse(
+                modelId=self.model_id,
+                messages=[{"role": "user", "content": [{"text": prompt}]}],
+                inferenceConfig={"temperature": self.temperature, "maxTokens": self.max_tokens}
+            )
+            result = response['output']['message']['content'][0]['text']
+            return self._parse_response(result)
+        except Exception as e:
+            print(f"Error calling Bedrock: {e}")
+            return {"findings": [], "ticket_completion": {}}
+
     def analyze_code(self, code: str, language: str, file_path: str, ticket_info: dict = None, previous_findings: list = None, previous_comments_context: str = "") -> Dict[str, Any]:
         """Send code to Bedrock Nova for analysis"""
         
