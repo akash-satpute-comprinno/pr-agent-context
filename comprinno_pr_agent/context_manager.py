@@ -9,7 +9,7 @@ from sentence_transformers import SentenceTransformer
 from pathlib import Path
 
 
-S3_BUCKET = os.getenv('FAISS_S3_BUCKET')  # e.g. "comprinno-pr-agent-context"
+S3_BUCKET = os.getenv('FAISS_S3_BUCKET')
 S3_PREFIX = os.getenv('FAISS_S3_PREFIX', 'faiss')
 
 
@@ -19,22 +19,19 @@ class PRContextManager:
         self.index_path = Path(index_path) / f"pr_{pr_number}"
         self.index_path.mkdir(parents=True, exist_ok=True)
 
-        # Initialize embedding model (local)
         self.encoder = SentenceTransformer('all-MiniLM-L6-v2')
         self.embedding_dim = 384
 
-        # FAISS index files (per PR)
         self.index_file = self.index_path / "findings.index"
         self.metadata_file = self.index_path / "findings.json"
 
-        # Download from S3 if available
         self._download_from_s3()
-
         self.index = self._load_or_create_index()
         self.metadata = self._load_metadata()
 
-    def _s3_key(self, filename: str) -> str:
-        return f"{S3_PREFIX}/pr_{self.pr_number}/{filename}"
+    def _s3_key(self, filename: str, pr_number: int = None) -> str:
+        pr = pr_number or self.pr_number
+        return f"{S3_PREFIX}/pr_{pr}/{filename}"
 
     def _download_from_s3(self):
         if not S3_BUCKET:
@@ -43,12 +40,11 @@ class PRContextManager:
             s3 = boto3.client('s3')
             for filename in ['findings.index', 'findings.json']:
                 local_path = self.index_path / filename
-                s3_key = self._s3_key(filename)
                 try:
-                    s3.download_file(S3_BUCKET, s3_key, str(local_path))
-                    print(f"📥 Downloaded FAISS {filename} from S3")
-                except s3.exceptions.ClientError:
-                    pass  # file doesn't exist yet, will be created fresh
+                    s3.download_file(S3_BUCKET, self._s3_key(filename), str(local_path))
+                    print(f"📥 Downloaded FAISS {filename} from S3 (pr_{self.pr_number})")
+                except Exception:
+                    pass
         except Exception as e:
             print(f"⚠️  S3 download warning: {e}")
 
@@ -64,34 +60,33 @@ class PRContextManager:
             print(f"📤 Uploaded FAISS index to S3 (pr_{self.pr_number})")
         except Exception as e:
             print(f"⚠️  S3 upload warning: {e}")
-    
+
     def _load_or_create_index(self):
         if self.index_file.exists():
             return faiss.read_index(str(self.index_file))
         return faiss.IndexFlatIP(self.embedding_dim)
-    
+
     def _load_metadata(self) -> List[Dict]:
         if self.metadata_file.exists():
             with open(self.metadata_file, 'r') as f:
                 return json.load(f)
         return []
-    
+
     def _save_index(self):
         faiss.write_index(self.index, str(self.index_file))
         with open(self.metadata_file, 'w') as f:
             json.dump(self.metadata, f, indent=2)
         self._upload_to_s3()
-    
+
     def store_findings(self, findings: List[Dict]):
-        """Store code analysis findings in FAISS"""
+        """Store findings in FAISS with pr_number tag"""
         for finding in findings:
-            # Create embedding from issue description + code
             text = f"{finding.get('category', '')} {finding.get('description', '')} {finding.get('code_snippet', '')}"
             embedding = self.encoder.encode([text])[0]
             self.index.add(np.array([embedding], dtype=np.float32))
-            
             self.metadata.append({
                 'id': len(self.metadata),
+                'pr_number': self.pr_number,
                 'file': finding.get('file', ''),
                 'line': finding.get('line_start', 0),
                 'category': finding.get('category', ''),
@@ -99,49 +94,61 @@ class PRContextManager:
                 'description': finding.get('description', ''),
                 'code_snippet': finding.get('code_snippet', ''),
                 'timestamp': datetime.now().isoformat(),
-                'status': 'open'  # open, fixed, wontfix
+                'status': 'open'
             })
-        
         self._save_index()
-    
-    def check_issue_fixed(self, new_code: str, old_finding: Dict) -> bool:
-        """Check if a previously reported issue is fixed in new code"""
-        # Simple check: if the problematic code snippet is no longer present
-        old_snippet = old_finding.get('code_snippet', '')
-        if old_snippet and old_snippet not in new_code:
-            return True
-        return False
-    
-    def compare_findings(self, new_findings: List[Dict], new_code: str) -> Dict:
-        """Compare new findings with stored findings"""
-        if not self.metadata:
-            return {
-                'new_issues': new_findings,
-                'fixed_issues': [],
-                'still_present': []
-            }
-        
-        new_categories = {f.get('category') for f in new_findings}
-        
-        fixed = []
-        still_present = []
-        
-        for old_finding in self.metadata:
-            if old_finding['status'] == 'open':
-                if self.check_issue_fixed(new_code, old_finding):
-                    fixed.append(old_finding)
-                    old_finding['status'] = 'fixed'
-                else:
-                    still_present.append(old_finding)
-        
+
+    def get_open_issues_for_files(self, file_paths: List[str]) -> List[Dict]:
+        """Get all open issues from ANY previous PR for the given files"""
+        return [
+            m for m in self.metadata
+            if m['status'] == 'open' and m.get('file', '') in file_paths
+        ]
+
+    def get_cross_pr_open_issues(self, file_paths: List[str]) -> List[Dict]:
+        """
+        Download and merge metadata from all PRs in S3,
+        return open issues for the given files from any PR.
+        """
+        if not S3_BUCKET:
+            return self.get_open_issues_for_files(file_paths)
+
+        all_issues = []
+        try:
+            s3 = boto3.client('s3')
+            # List all PR metadata files in S3
+            paginator = s3.get_paginator('list_objects_v2')
+            for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=f"{S3_PREFIX}/"):
+                for obj in page.get('Contents', []):
+                    key = obj['Key']
+                    if not key.endswith('findings.json'):
+                        continue
+                    # Skip current PR (already loaded)
+                    if f"pr_{self.pr_number}/" in key:
+                        continue
+                    try:
+                        response = s3.get_object(Bucket=S3_BUCKET, Key=key)
+                        metadata = json.loads(response['Body'].read())
+                        for m in metadata:
+                            if m.get('status') == 'open' and m.get('file', '') in file_paths:
+                                all_issues.append(m)
+                    except Exception:
+                        pass
+        except Exception as e:
+            print(f"⚠️  Cross-PR S3 scan warning: {e}")
+
+        # Also include current PR's open issues
+        all_issues.extend(self.get_open_issues_for_files(file_paths))
+        return all_issues
+
+    def mark_resolved(self, finding_id: int, pr_number: int = None):
+        """Mark a finding as resolved"""
+        for m in self.metadata:
+            if m['id'] == finding_id and m.get('pr_number', self.pr_number) == (pr_number or self.pr_number):
+                m['status'] = 'fixed'
+                m['resolved_in_pr'] = self.pr_number
+                m['resolved_at'] = datetime.now().isoformat()
         self._save_index()
-        
-        return {
-            'new_issues': new_findings,
-            'fixed_issues': fixed,
-            'still_present': still_present
-        }
-    
+
     def get_open_issues(self) -> List[Dict]:
-        """Get all open issues for this PR"""
         return [m for m in self.metadata if m['status'] == 'open']
