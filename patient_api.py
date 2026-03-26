@@ -50,7 +50,7 @@ def get_patient_history():
     logger.info("Patient history accessed by role=%s", role)
 
     return jsonify({
-        "patient_id": patient_id,
+        "patient_ref": "***",
         "records": [dict(r) for r in records],
         "total": len(records)
     })
@@ -84,4 +84,4 @@ def update_patient():
     # AC-2: No PII logged — id, name, phone intentionally excluded
     logger.info("Patient record updated by role=%s", role)
 
-    return jsonify({"status": "updated", "id": data['id']})
+    return jsonify({"status": "updated"})
