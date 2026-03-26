@@ -299,7 +299,12 @@ def parse_previous_findings(comments: list) -> list:
     for comment in comments:
         body = comment['body']
 
-        # Pattern: matches findings with **Issue:** field
+        # Only look inside the "Issues Found" section — ignore verification sections
+        issues_idx = body.find('### Issues Found')
+        if issues_idx == -1:
+            continue
+        body = body[issues_idx:]
+
         for match in re.finditer(
             r'\d+\.\s+\*\*(.+?)\*\*\s+\(Line\s+(\w+)\)\s*\n+\s*\*\*Issue:\*\*\s+(.+?)(?=\n\s*\*\*|\Z)',
             body, re.DOTALL
@@ -322,24 +327,6 @@ def parse_previous_findings(comments: list) -> list:
                 'description': match.group(3).strip()[:200],
                 'code_snippet': snippet[:300]
             })
-
-    # Fallback: simpler pattern
-    if not findings:
-        for comment in comments:
-            body = comment['body']
-            for match in re.finditer(r'\d+\.\s+\*\*(.+?)\*\*\s+\(Line\s+(\w+)\)\s*\n\s+(.+?)(?=\n|$)', body):
-                category = match.group(1).strip()
-                line = match.group(2).strip()
-                key = f"{category}:{line}"
-                if key not in seen:
-                    seen.add(key)
-                    findings.append({
-                        'id': len(findings),
-                        'category': category,
-                        'line': line,
-                        'description': match.group(3).strip().rstrip('.'),
-                        'code_snippet': ''
-                    })
 
     return findings
 
