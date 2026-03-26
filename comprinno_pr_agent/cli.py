@@ -140,18 +140,12 @@ def analyze_pr(pr_url: str, bedrock_client: BedrockClient, report_gen: MarkdownR
         print(f"🎫 Linked ticket: {ticket_info['ticket_id']} - {ticket_info['title']}")
     else:
         print(f"⚠️  No Jira ticket found in PR title")
-    
-    # Fetch previous agent comments from GitHub (source of truth)
+
+    # Fetch previous agent comments (for display/context only — not for parsing findings)
     previous_comments = github.get_previous_agent_comments()
-    previous_findings = parse_previous_findings(previous_comments)
-    
-    if previous_findings:
-        print(f"📋 Found {len(previous_findings)} previously flagged issue(s) — will check if resolved")
-        for f in previous_findings:
-            print(f"   - [{f['category']}] Line {f['line']}: {f['description'][:60]}")
-    else:
-        print(f"🆕 No previous analysis found — running fresh review")
-    
+    if previous_comments:
+        print(f"📋 Previous review comments found — passing as context")
+
     # Full analysis
     pr_files = github.get_pr_files()
     print(f"\n📁 Found {len(pr_files)} changed file(s)")
@@ -159,9 +153,9 @@ def analyze_pr(pr_url: str, bedrock_client: BedrockClient, report_gen: MarkdownR
     all_findings = []
     ticket_completion = {"done": [], "not_done": [], "partial": []}
     all_resolved_issues = []
-    verified_previous = []  # results of per-issue AI verification
+    verified_previous = []
 
-    # Get all current file contents for verification
+    # Get all current file contents
     file_contents = {}
     for file_info in pr_files:
         filename = file_info['filename']
@@ -169,6 +163,27 @@ def analyze_pr(pr_url: str, bedrock_client: BedrockClient, report_gen: MarkdownR
             code = github.get_file_content(filename)
             if code:
                 file_contents[filename] = code
+
+    # Load previous findings from FAISS (single source of truth)
+    previous_findings = []
+    faiss_open = context_mgr.get_open_issues()
+    if faiss_open:
+        print(f"📦 Loaded {len(faiss_open)} open issue(s) from FAISS")
+        for issue in faiss_open:
+            category = issue.get('category', '')
+            if not category or len(category) > 50 or '\n' in category:
+                continue
+            previous_findings.append({
+                'id': issue['id'],
+                'category': category,
+                'line': str(issue.get('line', 0)),
+                'description': issue.get('description', '')[:200],
+                'code_snippet': issue.get('code_snippet', '')[:300],
+                'from_pr': issue.get('pr_number')
+            })
+        print(f"📋 Found {len(previous_findings)} previously flagged issue(s) — will check if resolved")
+    else:
+        print(f"🆕 No previous analysis found — running fresh review")
 
     # Get cross-PR open issues from FAISS (issues from other PRs on same files)
     changed_files = [fi['filename'] for fi in pr_files if detect_language(fi['filename']) != 'unknown']
