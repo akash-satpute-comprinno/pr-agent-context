@@ -167,6 +167,17 @@ class GitHubProvider:
         
         return False
     
+    def get_pr_commits(self) -> list:
+        """Get all commits in the PR"""
+        commits = []
+        for commit in self.pr.get_commits():
+            commits.append({
+                'sha': commit.sha[:7],
+                'message': commit.commit.message,
+                'author': commit.commit.author.name
+            })
+        return commits
+
     def get_review_comments(self) -> List[Dict[str, Any]]:
         """Get all review comments (inline comments) from the agent"""
         review_comments = []
