@@ -316,8 +316,8 @@ def parse_previous_findings(comments: list) -> list:
 
         # Only match numbered list items — not bullet points
         for match in re.finditer(
-            r'^\d+\.\s+\*\*(.+?)\*\*\s+\(Line\s+(\w+)\)\s*\n+\s*\*\*Issue:\*\*\s+(.+?)(?=\n\s*\*\*|\Z)',
-            section, re.DOTALL | re.MULTILINE
+            r'^\d+\.\s+\*\*(.+?)\*\*\s+\(Line\s+(\w+)\)\s*\n+\s*\*\*Issue:\*\*\s+(.+?)$',
+            section, re.MULTILINE
         ):
             category = match.group(1).strip()
             line = match.group(2).strip()
