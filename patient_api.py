@@ -46,6 +46,7 @@ def get_patient_history():
         )
         records = cursor.fetchall()
 
+    # AC-2: No PII logged — name, phone, diagnosis, patient_id intentionally excluded
     logger.info("Patient history accessed by role=%s", role)
 
     return jsonify({
@@ -80,6 +81,7 @@ def update_patient():
         )
         conn.commit()
 
+    # AC-2: No PII logged — id, name, phone intentionally excluded
     logger.info("Patient record updated by role=%s", role)
 
     return jsonify({"status": "updated", "id": data['id']})
