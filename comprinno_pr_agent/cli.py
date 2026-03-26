@@ -379,12 +379,29 @@ def generate_pr_summary(pr_info: dict, files: List, findings: List, previous_com
 
     # Verified previous issues
     if verified_previous:
+        resolved = [v for v in verified_previous if v['status'] == 'resolved']
+        still_present = [v for v in verified_previous if v['status'] == 'still_present']
+        partial = [v for v in verified_previous if v['status'] == 'partial']
+
         summary += f"### 🔁 Previous Issues — Verification\n\n"
-        for v in verified_previous:
-            status_emoji = {'resolved': '✅ Resolved', 'still_present': '❌ Still Present', 'partial': '⚠️ Partial'}.get(v['status'], '❓ Unknown')
-            from_pr = f" *(from PR #{v['from_pr']})*" if v.get('from_pr') and v['from_pr'] != pr_info['number'] else ""
-            summary += f"**{v['category']}** (Line {v['line']}){from_pr} — {status_emoji}\n"
-            summary += f"> {v['reason'][:120]}\n\n"
+        if resolved:
+            summary += f"**✅ Resolved ({len(resolved)}):**\n"
+            for v in resolved:
+                from_pr = f" *(from PR #{v['from_pr']})*" if v.get('from_pr') and v['from_pr'] != pr_info['number'] else ""
+                summary += f"- **{v['category']}** (Line {v['line']}){from_pr} — {v['reason'][:100]}\n"
+            summary += "\n"
+        if still_present:
+            summary += f"**❌ Still Present ({len(still_present)}):**\n"
+            for v in still_present:
+                from_pr = f" *(from PR #{v['from_pr']})*" if v.get('from_pr') and v['from_pr'] != pr_info['number'] else ""
+                summary += f"- **{v['category']}** (Line {v['line']}){from_pr} — {v['reason'][:100]}\n"
+            summary += "\n"
+        if partial:
+            summary += f"**⚠️ Partial ({len(partial)}):**\n"
+            for v in partial:
+                from_pr = f" *(from PR #{v['from_pr']})*" if v.get('from_pr') and v['from_pr'] != pr_info['number'] else ""
+                summary += f"- **{v['category']}** (Line {v['line']}){from_pr} — {v['reason'][:100]}\n"
+            summary += "\n"
 
     # Add Ticket Details
     if ticket_info:
