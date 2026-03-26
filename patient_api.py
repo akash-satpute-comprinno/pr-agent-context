@@ -12,7 +12,7 @@ patient_bp = Blueprint('patient', __name__)
 
 
 @patient_bp.route('/api/patient/history', methods=['GET'])
-@jwt_required()  # FIXED: JWT authentication required
+@jwt_required()
 def get_patient_history():
     """Get full patient medical history"""
     current_user = get_jwt_identity()
@@ -26,7 +26,7 @@ def get_patient_history():
     records = cursor.fetchall()
     conn.close()
 
-    # BUG: PII still being logged in plain text
+    # BUG: PII still logged in plain text
     for record in records:
         logger.info(f"Patient record accessed: name={record['name']}, "
                     f"phone={record['phone']}, diagnosis={record['diagnosis']}, "
@@ -55,7 +55,7 @@ def update_patient():
     conn.commit()
     conn.close()
 
-    # BUG: Logging sensitive update data
-    logger.debug(f"Patient updated: {data}")
+    # FIXED: Log only non-sensitive info
+    logger.debug(f"Patient record updated: id={data.get('id')}")
 
     return jsonify({"status": "updated", "patient": data})
