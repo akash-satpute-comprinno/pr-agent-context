@@ -374,16 +374,14 @@ def generate_pr_summary(pr_info: dict, files: List, findings: List, previous_com
     summary = f"## 🤖 Deep Code Analysis Report\n\n"
     summary += f"**PR:** #{pr_info['number']} - {pr_info['title']}\n\n"
 
-    # Verified previous issues table
+    # Verified previous issues
     if verified_previous:
-        summary += f"### 🔁 Previous Issues — AI Verification\n\n"
-        summary += f"| Issue | Status | Verdict |\n"
-        summary += f"|-------|--------|---------|\n"
+        summary += f"### 🔁 Previous Issues — Verification\n\n"
         for v in verified_previous:
             status_emoji = {'resolved': '✅ Resolved', 'still_present': '❌ Still Present', 'partial': '⚠️ Partial'}.get(v['status'], '❓ Unknown')
             from_pr = f" *(from PR #{v['from_pr']})*" if v.get('from_pr') and v['from_pr'] != pr_info['number'] else ""
-            summary += f"| **{v['category']}** (Line {v['line']}){from_pr} | {status_emoji} | {v['reason'][:80]} |\n"
-        summary += "\n"
+            summary += f"**{v['category']}** (Line {v['line']}){from_pr} — {status_emoji}\n"
+            summary += f"> {v['reason'][:120]}\n\n"
 
     # Add Ticket Details
     if ticket_info:
