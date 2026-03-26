@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Comprinno PR Agent — Technical Documentation</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', sans-serif; background: #f4f6f9; color: #1a1a2e; line-height: 1.7; }
+    header { background: linear-gradient(135deg, #1a1a2e, #16213e); color: white; padding: 48px 40px; }
+    header h1 { font-size: 2.2rem; font-weight: 700; }
+    header p { margin-top: 10px; font-size: 1.05rem; opacity: 0.85; max-width: 700px; }
+    .badge { display: inline-block; background: #e94560; color: white; font-size: 0.75rem; padding: 3px 10px; border-radius: 20px; margin-left: 12px; vertical-align: middle; }
+    nav { background: #16213e; padding: 0 40px; display: flex; gap: 4px; flex-wrap: wrap; }
+    nav a { color: #aab4c8; text-decoration: none; padding: 12px 16px; font-size: 0.9rem; border-bottom: 3px solid transparent; transition: all 0.2s; }
+    nav a:hover { color: white; border-bottom-color: #e94560; }
+    .container { max-width: 1100px; margin: 40px auto; padding: 0 24px; }
+    section { background: white; border-radius: 12px; padding: 36px; margin-bottom: 28px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); }
+    h2 { font-size: 1.5rem; color: #1a1a2e; margin-bottom: 20px; padding-bottom: 10px; border-bottom: 2px solid #f0f0f0; }
+    h3 { font-size: 1.1rem; color: #16213e; margin: 24px 0 10px; }
+    p { margin-bottom: 14px; color: #444; }
+    ul, ol { padding-left: 22px; margin-bottom: 14px; color: #444; }
+    li { margin-bottom: 6px; }
+    code { background: #f0f4ff; color: #e94560; padding: 2px 7px; border-radius: 4px; font-size: 0.88rem; font-family: 'Courier New', monospace; }
+    pre { background: #1a1a2e; color: #e2e8f0; padding: 20px; border-radius: 8px; overflow-x: auto; font-size: 0.88rem; margin: 16px 0; line-height: 1.6; }
+    pre .comment { color: #6b8aad; }
+    pre .keyword { color: #e94560; }
+    pre .string { color: #68d391; }
+    .flow { display: flex; flex-direction: column; gap: 0; margin: 20px 0; }
+    .flow-step { display: flex; align-items: flex-start; gap: 16px; padding: 14px 0; border-left: 3px solid #e94560; padding-left: 20px; margin-left: 16px; position: relative; }
+    .flow-step::before { content: attr(data-step); position: absolute; left: -16px; background: #e94560; color: white; width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.8rem; font-weight: 700; }
+    .flow-step:last-child { border-left-color: transparent; }
+    .flow-title { font-weight: 600; color: #1a1a2e; }
+    .flow-desc { font-size: 0.9rem; color: #666; margin-top: 3px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; margin-top: 16px; }
+    .card { background: #f8faff; border: 1px solid #e8edf5; border-radius: 10px; padding: 20px; }
+    .card h4 { font-size: 1rem; color: #1a1a2e; margin-bottom: 8px; }
+    .card p { font-size: 0.9rem; margin: 0; }
+    .tag { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 0.78rem; font-weight: 600; margin: 2px; }
+    .tag-red { background: #fff0f0; color: #e94560; }
+    .tag-green { background: #f0fff4; color: #38a169; }
+    .tag-blue { background: #f0f4ff; color: #3b82f6; }
+    .tag-yellow { background: #fffbeb; color: #d97706; }
+    table { width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 0.92rem; }
+    th { background: #1a1a2e; color: white; padding: 12px 16px; text-align: left; }
+    td { padding: 11px 16px; border-bottom: 1px solid #f0f0f0; color: #444; }
+    tr:hover td { background: #f8faff; }
+    .sample-comment { background: #f8faff; border: 1px solid #dde5f0; border-radius: 10px; padding: 24px; font-size: 0.9rem; }
+    .sample-comment .section-title { font-weight: 700; color: #1a1a2e; margin: 16px 0 8px; }
+    .check { color: #38a169; font-weight: 600; }
+    .cross { color: #e94560; font-weight: 600; }
+    .warn { color: #d97706; font-weight: 600; }
+    footer { text-align: center; padding: 32px; color: #888; font-size: 0.88rem; }
+    .arch-diagram { background: #1a1a2e; border-radius: 10px; padding: 28px; color: #e2e8f0; font-family: 'Courier New', monospace; font-size: 0.85rem; line-height: 2; overflow-x: auto; }
+    .arch-diagram .box { color: #68d391; }
+    .arch-diagram .arrow { color: #6b8aad; }
+    .arch-diagram .label { color: #fbd38d; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Comprinno PR Agent <span class="badge">v2.0</span></h1>
+  <p>An AI-powered Pull Request review system that automatically analyzes code changes, validates against Jira tickets, verifies issue resolution, tracks findings across PRs using FAISS memory, and posts detailed findings directly on GitHub PRs.</p>
+</header>
+
+<nav>
+  <a href="#overview">Overview</a>
+  <a href="#architecture">Architecture</a>
+  <a href="#flow">How It Works</a>
+  <a href="#features">Features</a>
+  <a href="#faiss">FAISS Memory</a>
+  <a href="#jira">Jira Integration</a>
+  <a href="#commits">Commit Validation</a>
+  <a href="#output">Sample Output</a>
+  <a href="#setup">Setup</a>
+</nav>
+
+<div class="container">
+
+  <!-- OVERVIEW -->
+  <section id="overview">
+    <h2>📌 Overview</h2>
+    <p>The Comprinno PR Agent is a GitHub Actions-based tool that triggers automatically when a Pull Request is opened or updated. It uses <strong>AWS Bedrock (Amazon Nova Pro)</strong> to perform deep AI code analysis across 9 categories, integrates with <strong>Jira</strong> to validate code against ticket requirements, and uses <strong>FAISS vector memory</strong> to track issues across multiple reviews of the same PR.</p>
+    <div class="grid">
+      <div class="card">
+        <h4>🤖 AI Analysis</h4>
+        <p>AWS Bedrock Nova Pro analyzes code across security, performance, architecture, and 6 more categories with detailed fix suggestions.</p>
+      </div>
+      <div class="card">
+        <h4>🎫 Jira Validation</h4>
+        <p>Automatically fetches the linked Jira ticket and checks what's done, partially done, and still missing in the code.</p>
+      </div>
+      <div class="card">
+        <h4>🧠 FAISS Memory</h4>
+        <p>Stores findings as vector embeddings. Persists to S3 so context survives across GitHub Actions runs and multiple PRs.</p>
+      </div>
+      <div class="card">
+        <h4>💬 Inline Comments</h4>
+        <p>Posts findings directly on the exact code lines in the PR diff — with description, impact, fix steps, and code example.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ARCHITECTURE -->
+  <section id="architecture">
+    <h2>🏗️ Architecture</h2>
+    <div class="arch-diagram">
+<span class="label">GitHub PR / @agent analyze comment</span>
+              <span class="arrow">│</span>
+              <span class="arrow">▼</span>
+<span class="box">┌─────────────────────────────────────┐</span>
+<span class="box">│     GitHub Actions Workflow          │</span>
+<span class="box">│     github_action_runner.py          │</span>
+<span class="box">└──────────────┬──────────────────────┘</span>
+               <span class="arrow">│</span>
+       <span class="arrow">┌───────┴────────┐</span>
+       <span class="arrow">▼</span>                <span class="arrow">▼</span>
+<span class="box">┌──────────────┐  ┌──────────────────┐</span>
+<span class="box">│ JiraProvider │  │  GitHubProvider  │</span>
+<span class="box">│ (ticket info)│  │ (files, diffs,   │</span>
+<span class="box">│ + cache 1hr  │  │  comments)       │</span>
+<span class="box">└──────┬───────┘  └────────┬─────────┘</span>
+       <span class="arrow">└────────┬───────────┘</span>
+                <span class="arrow">▼</span>
+<span class="box">┌───────────────────────────────────┐</span>
+<span class="box">│         BedrockClient             │</span>
+<span class="box">│  Amazon Nova Pro (ap-south-1)     │</span>
+<span class="box">│  Prompt = code + Jira + history   │</span>
+<span class="box">└──────────────┬────────────────────┘</span>
+               <span class="arrow">▼</span>
+<span class="box">┌───────────────────────────────────┐</span>
+<span class="box">│       PRContextManager            │</span>
+<span class="box">│  FAISS IndexFlatIP (384-dim)      │</span>
+<span class="box">│  sentence-transformers embeddings │</span>
+<span class="box">│  ← S3 download / S3 upload →     │</span>
+<span class="box">└──────────────┬────────────────────┘</span>
+               <span class="arrow">▼</span>
+<span class="label">Inline PR comments + Summary comment on GitHub</span>
+    </div>
+
+    <h3>Key Files</h3>
+    <table>
+      <tr><th>File</th><th>Responsibility</th></tr>
+      <tr><td><code>github_action_runner.py</code></td><td>Entry point for GitHub Actions. Orchestrates the full flow.</td></tr>
+      <tr><td><code>cli.py</code></td><td>Core analysis logic — analyze_pr(), generate_pr_summary(), inline comments</td></tr>
+      <tr><td><code>bedrock/client.py</code></td><td>AWS Bedrock API calls, prompt building, response parsing</td></tr>
+      <tr><td><code>context_manager.py</code></td><td>FAISS vector store — store, retrieve, S3 sync</td></tr>
+      <tr><td><code>github_provider.py</code></td><td>GitHub API — fetch files, diffs, post comments</td></tr>
+      <tr><td><code>jira_provider.py</code></td><td>Jira REST API — fetch ticket details</td></tr>
+      <tr><td><code>jira_ticket_extractor.py</code></td><td>Extract ticket ID from PR title/branch, cache results</td></tr>
+    </table>
+  </section>
+
+  <!-- FLOW -->
+  <section id="flow">
+    <h2>⚙️ End-to-End Flow</h2>
+    <div class="flow">
+      <div class="flow-step" data-step="1">
+        <div>
+          <div class="flow-title">Trigger</div>
+          <div class="flow-desc">PR opened/updated OR someone comments <code>@agent analyze</code> on the PR</div>
+        </div>
+      </div>
+      <div class="flow-step" data-step="2">
+        <div>
+          <div class="flow-title">Jira Ticket Extraction</div>
+          <div class="flow-desc">Regex extracts ticket ID (e.g. <code>AAS-30</code>) from branch name or PR title. Fetches full ticket from Jira API — title, description, acceptance criteria, status, priority. Cached for 1 hour.</div>
+        </div>
+      </div>
+      <div class="flow-step" data-step="3">
+        <div>
+          <div class="flow-title">Previous Context Loading</div>
+          <div class="flow-desc">Fetches all previous agent comments from the PR. Parses previously flagged issues. Downloads FAISS index from S3 to restore memory. Fetches cross-PR open issues from other PRs on same files.</div>
+        </div>
+      </div>
+      <div class="flow-step" data-step="4">
+        <div>
+          <div class="flow-title">Commit Message Validation</div>
+          <div class="flow-desc">Fetches all commits in the PR and validates each message against conventional commit format. Flags vague, too-long, or incorrectly formatted messages.</div>
+        </div>
+      </div>
+      <div class="flow-step" data-step="5">
+        <div>
+          <div class="flow-title">Previous Issue Verification</div>
+          <div class="flow-desc">For each previously flagged issue, calls <code>verify_issue_resolution()</code> — a focused Bedrock call that checks if the issue is resolved, still present, or partially fixed. Updates FAISS status accordingly.</div>
+        </div>
+      </div>
+      <div class="flow-step" data-step="6">
+        <div>
+          <div class="flow-title">New Issue Detection</div>
+          <div class="flow-desc">Calls <code>find_new_issues()</code> per file — explicitly passes known issues so Bedrock only reports NEW problems. Filters to changed lines only.</div>
+        </div>
+      </div>
+      <div class="flow-step" data-step="7">
+        <div>
+          <div class="flow-title">Inline Comments</div>
+          <div class="flow-desc">Each new finding posted as inline comment on exact code line — severity, description, why it matters, how to fix, code example.</div>
+        </div>
+      </div>
+      <div class="flow-step" data-step="8">
+        <div>
+          <div class="flow-title">FAISS Storage</div>
+          <div class="flow-desc">New findings stored as vector embeddings. Resolved issues marked in FAISS. Index uploaded to S3.</div>
+        </div>
+      </div>
+      <div class="flow-step" data-step="9">
+        <div>
+          <div class="flow-title">Summary Comment</div>
+          <div class="flow-desc">Full PR comment with: previous issues verification table, Jira ticket completion, commit validation, resolved issues, new findings with fix suggestions.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FEATURES -->
+  <section id="features">
+    <h2>✨ Features</h2>
+
+    <h3>1. Deep Code Analysis (9 Categories)</h3>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;">
+      <span class="tag tag-red">Functional Validation</span>
+      <span class="tag tag-red">Security</span>
+      <span class="tag tag-blue">Architecture & Design</span>
+      <span class="tag tag-blue">Technical Correctness</span>
+      <span class="tag tag-yellow">Scalability & Performance</span>
+      <span class="tag tag-yellow">Reliability & Error Handling</span>
+      <span class="tag tag-green">Code Quality</span>
+      <span class="tag tag-green">Testing Considerations</span>
+      <span class="tag tag-green">Impact Assessment</span>
+    </div>
+
+    <h3>2. Diff-Aware Filtering</h3>
+    <p>Only reports issues on lines that were actually changed in the PR diff. For new files, all findings are included. This prevents noise from pre-existing issues in unchanged code.</p>
+
+    <h3>3. Issue Resolution Verification</h3>
+    <p>On re-analysis, each previously flagged issue is verified individually with a dedicated Bedrock call:</p>
+    <ul>
+      <li><strong>✅ Resolved</strong> → Bedrock confirms the fix is correct and complete. Issue marked as resolved in FAISS and moved to "Resolved Since Last Review" section.</li>
+      <li><strong>❌ Still Present</strong> → Issue not fixed. Re-raised with original details.</li>
+      <li><strong>⚠️ Partial</strong> → Partially fixed but still has problems. Explanation of what's missing.</li>
+    </ul>
+    <p>This uses <code>verify_issue_resolution()</code> in <code>bedrock/client.py</code> — a focused prompt that checks one specific issue at a time.</p>
+
+    <h3>4. Commit Message Validation</h3>
+    <p>Validates all commit messages in the PR against conventional commit standards:</p>
+    <ul>
+      <li>✅ Valid types: <code>feat</code>, <code>fix</code>, <code>chore</code>, <code>docs</code>, <code>refactor</code>, <code>test</code>, <code>style</code>, <code>perf</code>, <code>ci</code>, <code>build</code>, <code>revert</code></li>
+      <li>❌ Flags vague messages: "update", "fix stuff", "WIP", "changes"</li>
+      <li>❌ Flags long subject lines (>72 chars)</li>
+      <li>❌ Flags past tense ("fixed", "updated") — should use imperative mood ("fix", "update")</li>
+    </ul>
+    <p>Results shown in a table with per-commit status and specific issues.</p>
+
+    <h3>5. Re-analysis Trigger</h3>
+    <p>Comment any of the following on a PR to trigger a fresh analysis:</p>
+    <pre>@agent analyze</pre>
+  </section>
+
+  <!-- FAISS -->
+  <section id="faiss">
+    <h2>🧠 FAISS Conversational Memory</h2>
+    <p>FAISS (Facebook AI Similarity Search) is used to store code analysis findings as vector embeddings, enabling semantic search and cross-run memory.</p>
+
+    <h3>How It Works</h3>
+    <ol>
+      <li>Each finding is converted to text: <code>category + description + code_snippet</code></li>
+      <li>Embedded using <code>sentence-transformers/all-MiniLM-L6-v2</code> → 384-dimensional vector</li>
+      <li>Stored in a FAISS <code>IndexFlatIP</code> (inner product similarity) index</li>
+      <li>Index + metadata saved locally and uploaded to S3</li>
+      <li>On next run: downloaded from S3 to restore full history</li>
+    </ol>
+
+    <h3>S3 Persistence</h3>
+    <p>Since GitHub Actions runs in a fresh container every time, the FAISS index is persisted to S3:</p>
+    <pre><span class="comment"># Environment variables</span>
+FAISS_S3_BUCKET=your-bucket-name
+FAISS_S3_PREFIX=faiss   <span class="comment"># optional, default: "faiss"</span>
+
+<span class="comment"># S3 structure</span>
+s3://your-bucket/faiss/pr_2/findings.index
+s3://your-bucket/faiss/pr_2/findings.json
+s3://your-bucket/faiss/pr_3/findings.index
+s3://your-bucket/faiss/pr_3/findings.json</pre>
+
+    <h3>Cross-PR Issue Detection</h3>
+    <p><code>get_cross_pr_open_issues()</code> scans ALL previous PR indexes in S3 to find recurring issues across the codebase — useful for detecting patterns that appear in multiple PRs.</p>
+  </section>
+
+  <!-- JIRA -->
+  <section id="jira">
+    <h2>🎫 Jira Integration</h2>
+
+    <h3>Ticket ID Extraction</h3>
+    <p>Automatically extracts Jira ticket IDs from PR titles or branch names:</p>
+    <table>
+      <tr><th>Input</th><th>Extracted ID</th></tr>
+      <tr><td><code>AAS-30 Fix SQL injection</code></td><td>AAS-30</td></tr>
+      <tr><td><code>[AAS-30] Fix login bug</code></td><td>AAS-30</td></tr>
+      <tr><td><code>feature/AAS-30-fix-auth</code></td><td>AAS-30</td></tr>
+    </table>
+
+    <h3>Ticket Completion Analysis</h3>
+    <p>Bedrock evaluates the full ticket (title, description, acceptance criteria) against the code and returns:</p>
+    <ul>
+      <li><strong>✅ Done</strong> — requirement implemented and verified correct</li>
+      <li><strong>⚠️ Partial</strong> — partially implemented, what's missing</li>
+      <li><strong>❌ Not Done</strong> — requirement not yet addressed in code</li>
+    </ul>
+
+    <h3>Configuration</h3>
+    <pre>JIRA_URL=https://yourcompany.atlassian.net
+JIRA_EMAIL=your@email.com
+JIRA_API_TOKEN=your_api_token   <span class="comment"># from id.atlassian.com/manage-profile/security/api-tokens</span></pre>
+  </section>
+
+  <!-- COMMIT VALIDATION -->
+  <section id="commits">
+    <h2>📝 Commit Message Validation</h2>
+    <p>Every commit in the PR is validated against <a href="https://www.conventionalcommits.org/" target="_blank">Conventional Commits</a> standard.</p>
+
+    <h3>Valid Format</h3>
+    <pre><span class="string">type(scope): description</span>
+
+<span class="comment"># Examples:</span>
+fix: resolve SQL injection in authenticate_user
+feat(auth): add JWT token expiry
+chore: update dependencies
+docs: add API documentation</pre>
+
+    <h3>Valid Types</h3>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;">
+      <span class="tag tag-green">feat</span>
+      <span class="tag tag-red">fix</span>
+      <span class="tag tag-blue">chore</span>
+      <span class="tag tag-blue">docs</span>
+      <span class="tag tag-blue">refactor</span>
+      <span class="tag tag-blue">test</span>
+      <span class="tag tag-yellow">style</span>
+      <span class="tag tag-yellow">perf</span>
+      <span class="tag tag-yellow">ci</span>
+      <span class="tag tag-yellow">build</span>
+      <span class="tag tag-yellow">revert</span>
+    </div>
+
+    <h3>What Gets Flagged</h3>
+    <table>
+      <tr><th>Issue</th><th>Example</th><th>Fix</th></tr>
+      <tr><td>Missing type prefix</td><td><code>AAS-30 Fix SQL injection</code></td><td><code>fix: resolve SQL injection in auth service</code></td></tr>
+      <tr><td>Subject too long</td><td><code>fix: resolve all issues - SQL injection, resource leak, exception handling</code></td><td>Keep under 72 chars</td></tr>
+      <tr><td>Past tense</td><td><code>fix: fixed the login bug</code></td><td><code>fix: resolve login bug</code></td></tr>
+      <tr><td>Vague message</td><td><code>update</code>, <code>fix stuff</code>, <code>WIP</code></td><td>Be specific about what changed</td></tr>
+    </table>
+
+    <h3>Sample Output in PR Comment</h3>
+    <div class="sample-comment">
+      <p><strong>📝 Commit Message Review</strong></p>
+      <table>
+        <tr><th>Commit</th><th>Message</th><th>Status</th></tr>
+        <tr><td><code>2ad931b</code></td><td>AAS-30 Add JWT service</td><td>❌</td></tr>
+        <tr><td><code>cca0661</code></td><td>fix: remove fallback secret, raise error if JWT_SECRET_KEY not set</td><td>✅</td></tr>
+        <tr><td><code>de38258</code></td><td>fix: resolve all remaining security issues in jwt_service</td><td>✅</td></tr>
+      </table>
+      <p style="margin-top:12px;"><strong>Issues:</strong></p>
+      <ul>
+        <li><code>2ad931b</code>: Missing conventional commit format — use <code>type: description</code></li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- SAMPLE OUTPUT -->
+  <section id="output">
+    <h2>📋 Sample PR Comment Output</h2>
+    <div class="sample-comment">
+      <div class="section-title">🤖 Deep Code Analysis Report</div>
+      <p><strong>PR:</strong> #3 - AAS-30 Add JWT service with token generation</p>
+
+      <div class="section-title">🔁 Previous Issues — AI Verification</div>
+      <table>
+        <tr><th>Issue</th><th>Status</th><th>Verdict</th></tr>
+        <tr><td><strong>Resource Leak</strong> (Line 13)</td><td><span class="check">✅ Resolved</span></td><td>get_user_data now uses <code>with</code> statement</td></tr>
+        <tr><td><strong>SQL Injection</strong> (Line 21)</td><td><span class="check">✅ Resolved</span></td><td>delete_user uses parameterized queries</td></tr>
+        <tr><td><strong>Hardcoded Secret</strong> (Line 3)</td><td><span class="check">✅ Resolved</span></td><td>SECRET_KEY loaded from env var</td></tr>
+        <tr><td><strong>security</strong> (Line 16)</td><td><span class="cross">❌ Still Present</span></td><td>delete_user doesn't check if user exists</td></tr>
+      </table>
+
+      <div class="section-title">✅ Resolved Since Last Review</div>
+      <ul>
+        <li><span class="check">✅</span> <strong>Hardcoded Secret</strong> — Secret key now loaded from env var using <code>os.getenv()</code>. Correctly implemented.</li>
+        <li><span class="check">✅</span> <strong>Token Expiration</strong> — JWT token now expires in 1 hour using <code>timedelta(hours=1)</code>. Correctly implemented.</li>
+      </ul>
+
+      <div class="section-title">📋 Jira Ticket Completion — AAS-30</div>
+      <p><strong>Ticket:</strong> Fix SQL injection in auth service</p>
+      <ul>
+        <li><span class="check">✅ Done:</span> Secret loaded from env var (verified correct)</li>
+        <li><span class="cross">❌ Not Done:</span> SQL injection fix in <code>get_user_data</code></li>
+        <li><span class="cross">❌ Not Done:</span> Exception handling in <code>verify_token</code></li>
+      </ul>
+
+      <div class="section-title">🔍 Code Analysis Results</div>
+      <table>
+        <tr><th>Metric</th><th>Count</th></tr>
+        <tr><td>Files Analyzed</td><td>1</td></tr>
+        <tr><td>Total Issues</td><td>2</td></tr>
+        <tr><td>🔴 Critical</td><td>2</td></tr>
+        <tr><td>🟡 Warning</td><td>0</td></tr>
+        <tr><td>🔵 Info</td><td>0</td></tr>
+      </table>
+
+      <div class="section-title">🔴 Critical Issues</div>
+      <p><strong>1. SQL Injection Risk</strong> (Line 19)</p>
+      <p><strong>Issue:</strong> <code>get_user_data</code> uses string concatenation to build SQL query.</p>
+      <p><strong>Why it matters:</strong> Attackers can manipulate <code>user_id</code> to access or delete any data.</p>
+      <p><strong>How to fix:</strong> Use parameterized queries with <code>?</code> placeholder.</p>
+      <pre>cursor.execute(<span class="string">"SELECT * FROM users WHERE id = ?"</span>, (user_id,))</pre>
+    </div>
+  </section>
+
+  <!-- SETUP -->
+  <section id="setup">
+    <h2>🚀 Setup Guide</h2>
+
+    <h3>GitHub Secrets Required</h3>
+    <table>
+      <tr><th>Secret</th><th>Description</th></tr>
+      <tr><td><code>AWS_ACCESS_KEY_ID</code></td><td>AWS credentials</td></tr>
+      <tr><td><code>AWS_SECRET_ACCESS_KEY</code></td><td>AWS credentials</td></tr>
+      <tr><td><code>AWS_SESSION_TOKEN</code></td><td>Required for STS/SSO credentials only</td></tr>
+      <tr><td><code>AWS_REGION</code></td><td>e.g. <code>ap-south-1</code></td></tr>
+      <tr><td><code>BEDROCK_MODEL</code></td><td>e.g. <code>apac.amazon.nova-pro-v1:0</code></td></tr>
+      <tr><td><code>JIRA_URL</code></td><td>e.g. <code>https://yourcompany.atlassian.net</code></td></tr>
+      <tr><td><code>JIRA_EMAIL</code></td><td>Jira login email</td></tr>
+      <tr><td><code>JIRA_API_TOKEN</code></td><td>From Atlassian API tokens page</td></tr>
+    </table>
+
+    <h3>Optional — S3 for FAISS Persistence</h3>
+    <table>
+      <tr><th>Secret / Env Var</th><th>Description</th></tr>
+      <tr><td><code>FAISS_S3_BUCKET</code></td><td>S3 bucket name for storing FAISS indexes</td></tr>
+      <tr><td><code>FAISS_S3_PREFIX</code></td><td>S3 key prefix (default: <code>faiss</code>)</td></tr>
+    </table>
+
+    <h3>Workflow Triggers</h3>
+    <pre><span class="keyword">on:</span>
+  pull_request:
+    types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created, edited]   <span class="comment"># triggers on @agent analyze</span></pre>
+
+    <h3>Local Usage</h3>
+    <pre><span class="comment"># Analyze a single file</span>
+python cli.py --file path/to/file.py
+
+<span class="comment"># Analyze a GitHub PR</span>
+python cli.py --pr_url https://github.com/owner/repo/pull/123
+
+<span class="comment"># Analyze all files in a directory</span>
+python cli.py --directory ./src</pre>
+
+    <h3>AWS IAM Permission Required</h3>
+    <pre>{
+  <span class="string">"Effect"</span>: <span class="string">"Allow"</span>,
+  <span class="string">"Action"</span>: [<span class="string">"bedrock:InvokeModel"</span>],
+  <span class="string">"Resource"</span>: <span class="string">"*"</span>
+}</pre>
+  </section>
+
+</div>
+
+<footer>
+  <p>Comprinno PR Agent — Built with AWS Bedrock, FAISS, GitHub Actions, and Jira API</p>
+  <p style="margin-top:6px;">Comprinno Technologies &copy; 2026</p>
+</footer>
+
+</body>
+</html>
