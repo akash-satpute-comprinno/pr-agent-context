@@ -288,55 +288,58 @@ def analyze_pr(pr_url: str, bedrock_client: BedrockClient, report_gen: MarkdownR
 
 
 def parse_previous_findings(comments: list) -> list:
-    """Extract previously flagged issues from the MOST RECENT agent comment only"""
+    """Extract previously flagged issues from ALL agent comments (deduplicated by category+line)"""
     if not comments:
         return []
 
     import re
-    # Only use the most recent comment to avoid duplicates across runs
-    body = comments[0]['body']
     seen = set()
     findings = []
 
-    # Pattern: matches findings with **Issue:** field
-    for match in re.finditer(
-        r'\d+\.\s+\*\*(.+?)\*\*\s+\(Line\s+(\w+)\)\s*\n+\s*\*\*Issue:\*\*\s+(.+?)(?=\n\s*\*\*|\Z)',
-        body, re.DOTALL
-    ):
-        category = match.group(1).strip()
-        line = match.group(2).strip()
-        key = f"{category}:{line}"
-        if key in seen:
-            continue
-        seen.add(key)
+    for comment in comments:
+        body = comment['body']
 
-        desc_end = match.end()
-        snippet_match = re.search(r'\*\*Problematic code:\*\*\s*```\w*\n\s*(.*?)```', body[desc_end:desc_end+1000], re.DOTALL)
-        snippet = snippet_match.group(1).strip() if snippet_match else ''
-
-        findings.append({
-            'id': len(findings),
-            'category': category,
-            'line': line,
-            'description': match.group(3).strip()[:200],
-            'code_snippet': snippet[:300]
-        })
-
-    # Fallback: simpler pattern
-    if not findings:
-        for match in re.finditer(r'\d+\.\s+\*\*(.+?)\*\*\s+\(Line\s+(\w+)\)\s*\n\s+(.+?)(?=\n|$)', body):
+        # Pattern: matches findings with **Issue:** field
+        for match in re.finditer(
+            r'\d+\.\s+\*\*(.+?)\*\*\s+\(Line\s+(\w+)\)\s*\n+\s*\*\*Issue:\*\*\s+(.+?)(?=\n\s*\*\*|\Z)',
+            body, re.DOTALL
+        ):
             category = match.group(1).strip()
             line = match.group(2).strip()
             key = f"{category}:{line}"
-            if key not in seen:
-                seen.add(key)
-                findings.append({
-                    'id': len(findings),
-                    'category': category,
-                    'line': line,
-                    'description': match.group(3).strip().rstrip('.'),
-                    'code_snippet': ''
-                })
+            if key in seen:
+                continue
+            seen.add(key)
+
+            desc_end = match.end()
+            snippet_match = re.search(r'\*\*Problematic code:\*\*\s*```\w*\n\s*(.*?)```', body[desc_end:desc_end+1000], re.DOTALL)
+            snippet = snippet_match.group(1).strip() if snippet_match else ''
+
+            findings.append({
+                'id': len(findings),
+                'category': category,
+                'line': line,
+                'description': match.group(3).strip()[:200],
+                'code_snippet': snippet[:300]
+            })
+
+    # Fallback: simpler pattern
+    if not findings:
+        for comment in comments:
+            body = comment['body']
+            for match in re.finditer(r'\d+\.\s+\*\*(.+?)\*\*\s+\(Line\s+(\w+)\)\s*\n\s+(.+?)(?=\n|$)', body):
+                category = match.group(1).strip()
+                line = match.group(2).strip()
+                key = f"{category}:{line}"
+                if key not in seen:
+                    seen.add(key)
+                    findings.append({
+                        'id': len(findings),
+                        'category': category,
+                        'line': line,
+                        'description': match.group(3).strip().rstrip('.'),
+                        'code_snippet': ''
+                    })
 
     return findings
 
