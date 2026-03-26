@@ -170,6 +170,23 @@ def analyze_pr(pr_url: str, bedrock_client: BedrockClient, report_gen: MarkdownR
             if code:
                 file_contents[filename] = code
 
+    # Get cross-PR open issues from FAISS (issues from other PRs on same files)
+    changed_files = [fi['filename'] for fi in pr_files if detect_language(fi['filename']) != 'unknown']
+    cross_pr_issues = context_mgr.get_cross_pr_open_issues(changed_files)
+    if cross_pr_issues:
+        print(f"\n🔗 Found {len(cross_pr_issues)} open issue(s) from previous PRs on same files")
+        # Merge into previous_findings for verification
+        for issue in cross_pr_issues:
+            if not any(f.get('category') == issue.get('category') and
+                      f.get('line') == str(issue.get('line')) for f in previous_findings):
+                previous_findings.append({
+                    'category': issue['category'],
+                    'line': str(issue['line']),
+                    'description': issue['description'],
+                    'code_snippet': issue.get('code_snippet', ''),
+                    'from_pr': issue.get('pr_number')
+                })
+
     # Step 1 — Verify each previous finding with focused AI call
     if previous_findings:
         print(f"\n🔎 Verifying {len(previous_findings)} previous issue(s)...")
@@ -186,9 +203,13 @@ def analyze_pr(pr_url: str, bedrock_client: BedrockClient, report_gen: MarkdownR
                 'line': old_finding['line'],
                 'description': old_finding['description'],
                 'status': status,
-                'reason': reason
+                'reason': reason,
+                'from_pr': old_finding.get('from_pr')
             })
             print(f"   → {status}: {reason[:60]}")
+            # Update FAISS status if resolved
+            if status == 'resolved' and old_finding.get('id') is not None:
+                context_mgr.mark_resolved(old_finding['id'], old_finding.get('from_pr'))
 
     # Step 2 — Find NEW issues per file (excluding known ones)
     known_issues = previous_findings or []
@@ -358,7 +379,8 @@ def generate_pr_summary(pr_info: dict, files: List, findings: List, previous_com
         summary += f"|-------|--------|---------|\n"
         for v in verified_previous:
             status_emoji = {'resolved': '✅ Resolved', 'still_present': '❌ Still Present', 'partial': '⚠️ Partial'}.get(v['status'], '❓ Unknown')
-            summary += f"| **{v['category']}** (Line {v['line']}) | {status_emoji} | {v['reason'][:80]} |\n"
+            from_pr = f" *(from PR #{v['from_pr']})*" if v.get('from_pr') and v['from_pr'] != pr_info['number'] else ""
+            summary += f"| **{v['category']}** (Line {v['line']}){from_pr} | {status_emoji} | {v['reason'][:80]} |\n"
         summary += "\n"
 
     # Add Ticket Details
