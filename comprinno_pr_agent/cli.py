@@ -175,14 +175,17 @@ def analyze_pr(pr_url: str, bedrock_client: BedrockClient, report_gen: MarkdownR
     cross_pr_issues = context_mgr.get_cross_pr_open_issues(changed_files)
     if cross_pr_issues:
         print(f"\n🔗 Found {len(cross_pr_issues)} open issue(s) from previous PRs on same files")
-        # Merge into previous_findings for verification
         for issue in cross_pr_issues:
-            if not any(f.get('category') == issue.get('category') and
-                      f.get('line') == str(issue.get('line')) for f in previous_findings):
+            category = issue.get('category', '')
+            # Skip corrupted FAISS entries — valid categories are short strings
+            if not category or len(category) > 50 or '\n' in category or '**' in category:
+                continue
+            key = f"{category}:{issue.get('line')}"
+            if not any(f.get('category') == category and f.get('line') == str(issue.get('line')) for f in previous_findings):
                 previous_findings.append({
-                    'category': issue['category'],
+                    'category': category,
                     'line': str(issue['line']),
-                    'description': issue['description'],
+                    'description': issue['description'][:200],
                     'code_snippet': issue.get('code_snippet', ''),
                     'from_pr': issue.get('pr_number')
                 })
