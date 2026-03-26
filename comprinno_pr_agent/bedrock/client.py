@@ -155,23 +155,52 @@ Return ONLY valid JSON:
 
         ticket_section = ""
         if ticket_info:
+            ac = "\n".join(f"  - {c}" for c in ticket_info.get('acceptance_criteria', [])) or "  Not specified"
             ticket_section = f"""## Jira Ticket Context
 Ticket: {ticket_info.get('ticket_id')} - {ticket_info.get('title')}
-Description: {str(ticket_info.get('description', ''))[:300]}
+Type: {ticket_info.get('type')} | Priority: {ticket_info.get('priority')} | Status: {ticket_info.get('status')}
+Description: {str(ticket_info.get('description', ''))[:500]}
+Acceptance Criteria:
+{ac}
+
+## Ticket Completion Evaluation Instructions
+Evaluate the code against the FULL Jira ticket — title, description, and acceptance criteria together.
+
+For each requirement in the ticket:
+1. Understand the GOAL of the requirement, not just its literal wording
+2. Look at what the code actually DOES — its behavior and outcome
+3. If the code achieves the goal of the requirement, mark it as "done"
+4. If the code partially addresses it but something is still missing, mark as "partial" and explain what's missing
+5. If the requirement is not addressed at all, mark as "not_done"
+
+Be a pragmatic senior engineer — evaluate intent and outcome, not surface-level keyword matching.
 
 """
 
-        prompt = f"""You are a code reviewer. Find ONLY NEW issues in this code that are NOT already in the known issues list below.
+        prompt = f"""You are a senior software engineer performing a thorough code review.
+
+Your task has TWO parts:
+
+## PART 1 — Find NEW Issues
+Review the code and identify issues that are NOT already in the known issues list.
+Do NOT re-report anything already in the known list.
+Focus on: security, correctness, performance, reliability, code quality.
+
+## PART 2 — Evaluate Jira Ticket Completion
+Based on the Jira ticket context provided, evaluate what has been done, what is partially done, and what is still missing.
+Consider the full ticket — title, description, and acceptance criteria together.
+Judge by the actual behavior and outcome of the code, not literal keyword matching.
 
 ## Already Known Issues (DO NOT re-report these)
 {known_summary}
 
-{ticket_section}## Code to Review ({language}) — {file_path}
+{ticket_section}
+## Code to Review ({language}) — {file_path}
 ```{language}
 {code}
 ```
 
-Return ONLY valid JSON with new issues not in the known list:
+Return ONLY valid JSON:
 {{
   "findings": [
     {{
@@ -187,10 +216,11 @@ Return ONLY valid JSON with new issues not in the known list:
     }}
   ],
   "ticket_completion": {{
-    "done": ["requirement — verified correct"],
-    "not_done": ["requirement — missing"],
-    "partial": ["requirement — partially done"]
+    "done": ["specific requirement from ticket — how the code satisfies it"],
+    "not_done": ["specific requirement from ticket — what is missing"],
+    "partial": ["specific requirement from ticket — what was done and what remains"]
   }}
+}}
 }}"""
 
         try:
