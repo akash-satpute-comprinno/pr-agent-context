@@ -46,7 +46,7 @@ def get_patient_history():
         )
         records = cursor.fetchall()
 
-    logger.info("Patient history accessed: patient_id=%s by role=%s", patient_id, role)
+    logger.info("Patient history accessed by role=%s", role)
 
     return jsonify({
         "patient_id": patient_id,
@@ -80,6 +80,6 @@ def update_patient():
         )
         conn.commit()
 
-    logger.info("Patient record updated: id=%s by role=%s", data['id'], role)
+    logger.info("Patient record updated by role=%s", role)
 
     return jsonify({"status": "updated", "id": data['id']})
