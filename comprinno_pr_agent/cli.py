@@ -291,21 +291,19 @@ def analyze_pr(pr_url: str, bedrock_client: BedrockClient, report_gen: MarkdownR
 
 
 def parse_previous_findings(comments: list) -> list:
-    """Extract open issues from ALL agent comments — skip anything resolved in a later comment"""
+    """Extract open issues from ALL agent comments — only numbered findings, skip resolved ones"""
     if not comments:
         return []
 
     import re
 
-    # First pass — collect all resolved category:line keys from ALL comments
+    # First — collect all resolved keys from ALL comments
     resolved_keys = set()
     for comment in comments:
-        body = comment['body']
-        # Find resolved items in verification section
-        for match in re.finditer(r'\*\*(.+?)\*\*\s+\(Line\s+(\w+)\)[^—]*—\s*✅\s*Resolved', body):
+        for match in re.finditer(r'[-•]\s+\*\*(.+?)\*\*\s+\(Line\s+(\w+)\)[^—\n]*—[^—\n]*✅', comment['body']):
             resolved_keys.add(f"{match.group(1).strip()}:{match.group(2).strip()}")
 
-    # Second pass — collect findings from Issues Found sections, skip resolved ones
+    # Second — collect ONLY numbered findings (1. 2. 3.) from Issues Found sections
     seen = set()
     findings = []
 
@@ -316,15 +314,15 @@ def parse_previous_findings(comments: list) -> list:
             continue
         section = body[issues_idx:]
 
+        # Only match numbered list items — not bullet points
         for match in re.finditer(
-            r'\d+\.\s+\*\*(.+?)\*\*\s+\(Line\s+(\w+)\)\s*\n+\s*\*\*Issue:\*\*\s+(.+?)(?=\n\s*\*\*|\Z)',
-            section, re.DOTALL
+            r'^\d+\.\s+\*\*(.+?)\*\*\s+\(Line\s+(\w+)\)\s*\n+\s*\*\*Issue:\*\*\s+(.+?)(?=\n\s*\*\*|\Z)',
+            section, re.DOTALL | re.MULTILINE
         ):
             category = match.group(1).strip()
             line = match.group(2).strip()
             key = f"{category}:{line}"
 
-            # Skip if already seen or resolved in a later comment
             if key in seen or key in resolved_keys:
                 continue
             seen.add(key)
