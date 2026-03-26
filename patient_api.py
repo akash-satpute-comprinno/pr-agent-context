@@ -14,23 +14,25 @@ patient_bp = Blueprint('patient', __name__)
 @patient_bp.route('/api/patient/history', methods=['GET'])
 @jwt_required()
 def get_patient_history():
-    """Get full patient medical history"""
+    """Get full patient medical history — requires JWT auth"""
     current_user = get_jwt_identity()
     patient_id = request.args.get('patient_id')
 
-    # BUG: SQL injection still present
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    query = "SELECT * FROM patient_records WHERE patient_id = '" + str(patient_id) + "'"
-    cursor.execute(query)
-    records = cursor.fetchall()
-    conn.close()
+    # Validate input
+    if not patient_id or not str(patient_id).isdigit():
+        return jsonify({"error": "Invalid patient_id"}), 400
 
-    # BUG: PII still logged in plain text
-    for record in records:
-        logger.info(f"Patient record accessed: name={record['name']}, "
-                    f"phone={record['phone']}, diagnosis={record['diagnosis']}, "
-                    f"prescription={record['prescription']}")
+    # FIXED: parameterized query — no SQL injection
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM patient_records WHERE patient_id = ?",
+            (patient_id,)
+        )
+        records = cursor.fetchall()
+
+    # FIXED: log only non-PII info
+    logger.info(f"Patient history accessed by user={current_user}, patient_id={patient_id}, records={len(records)}")
 
     return jsonify({
         "patient_id": patient_id,
@@ -40,22 +42,26 @@ def get_patient_history():
 
 
 @patient_bp.route('/api/patient/update', methods=['POST'])
+@jwt_required()
 def update_patient():
-    """Update patient information"""
+    """Update patient information — requires JWT auth"""
+    current_user = get_jwt_identity()
     data = request.get_json()
 
-    # BUG: No authentication, no input validation
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "UPDATE patients SET name='" + data['name'] +
-        "', phone='" + data['phone'] +
-        "' WHERE id=" + str(data['id'])
-    )
-    conn.commit()
-    conn.close()
+    # Validate required fields
+    if not data or not all(k in data for k in ['id', 'name', 'phone']):
+        return jsonify({"error": "Missing required fields"}), 400
 
-    # FIXED: Log only non-sensitive info
-    logger.debug(f"Patient record updated: id={data.get('id')}")
+    # FIXED: parameterized query — no SQL injection
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE patients SET name = ?, phone = ? WHERE id = ?",
+            (data['name'], data['phone'], data['id'])
+        )
+        conn.commit()
 
-    return jsonify({"status": "updated", "patient": data})
+    # FIXED: log only non-PII info
+    logger.debug(f"Patient record updated: id={data['id']} by user={current_user}")
+
+    return jsonify({"status": "updated", "id": data['id']})
