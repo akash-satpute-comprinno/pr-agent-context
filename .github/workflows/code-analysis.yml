@@ -23,17 +23,23 @@ jobs:
         contains(github.event.comment.body, 'analyze')))
     
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      
+          ref: main
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
         env:
           FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+      - name: Install Probe (codebase search)
+        shell: bash
+        run: curl -fsSL https://raw.githubusercontent.com/probelabs/probe/main/install.sh | bash
+        continue-on-error: true
 
       - name: Cache pip dependencies
         uses: actions/cache@v4
@@ -42,10 +48,6 @@ jobs:
           key: ${{ runner.os }}-pip-boto3-pygithub-faiss-sentence-transformers
           restore-keys: |
             ${{ runner.os }}-pip-
-      
-      - name: Install Probe (codebase search)
-        run: curl -fsSL https://raw.githubusercontent.com/probelabs/probe/main/install.sh | sh
-        continue-on-error: true
 
       - name: Install dependencies
         run: |
@@ -57,7 +59,7 @@ jobs:
           pip install sentence-transformers>=2.2.2
           pip install python-dotenv>=1.0.0
           pip install requests>=2.28.0
-      
+
       - name: Get PR URL
         id: pr_url
         run: |
@@ -66,7 +68,7 @@ jobs:
           else
             echo "url=${{ github.event.issue.pull_request.html_url }}" >> $GITHUB_OUTPUT
           fi
-      
+
       - name: Run Deep Code Analysis
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
